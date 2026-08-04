@@ -1,0 +1,11 @@
+[
+  {
+    "teacherId": "",
+    "currentUsername": "",
+    "newUsername": "",
+    "newClassIds": [],
+    "permissions": [
+      { "classId": "basic-1", "subjectIds": ["mathematics", "english-language"] }
+    ]
+  }
+]
