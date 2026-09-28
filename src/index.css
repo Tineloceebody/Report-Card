@@ -30,11 +30,13 @@ textarea {
   touch-action: manipulation;
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
 select,
 textarea {
-  color: #ffffff !important;
-  -webkit-text-fill-color: #ffffff !important;
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  caret-color: #f8fafc;
 }
 
 select option {
@@ -45,10 +47,20 @@ select option {
 input[type="number"],
 input[type="text"],
 input[type="password"] {
-  color: #ffffff !important;
-  -webkit-text-fill-color: #ffffff !important;
   opacity: 1 !important;
   -webkit-opacity: 1 !important;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+select:-webkit-autofill {
+  -webkit-text-fill-color: #f8fafc !important;
+  -webkit-box-shadow: 0 0 0 1000px #0f172a inset !important;
+  caret-color: #f8fafc;
 }
 
 input::placeholder,
