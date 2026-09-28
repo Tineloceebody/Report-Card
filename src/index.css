@@ -2,6 +2,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   font-family: 'Outfit', sans-serif;
 }
 
@@ -14,6 +15,7 @@ body {
 
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 .app-shell {
@@ -26,6 +28,34 @@ input,
 select,
 textarea {
   touch-action: manipulation;
+}
+
+input,
+select,
+textarea {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+select option {
+  background-color: #0f172a;
+  color: #ffffff;
+}
+
+input[type="number"],
+input[type="text"],
+input[type="password"] {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  opacity: 1 !important;
+  -webkit-opacity: 1 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1;
 }
 
 .app-card {

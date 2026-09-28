@@ -18,7 +18,8 @@ export type AdminTabId =
   | "sba-nc-report"
   | "midterm-report"
   | "data-editor"
-  | "report-settings";
+  | "report-settings"
+  | "promotion";
 
 interface AdminDashboardCardsProps {
   activeTab: string;
@@ -30,6 +31,7 @@ interface AdminDashboardCardsProps {
   nurseryChecklists?: any[];
   viewMode?: "cards" | "workspace";
   setViewMode?: (mode: "cards" | "workspace") => void;
+  onOpenPromoteModal?: () => void;
 }
 
 interface AdminCardDefinition {
@@ -148,6 +150,20 @@ const ADMIN_CARDS: AdminCardDefinition[] = [
       primary: "Calendar",
       secondary: "Term & Reopening Dates"
     })
+  },
+  {
+    id: "promotion",
+    title: "Student Promotion",
+    icon: Users,
+    gradient: "from-emerald-500/25 via-teal-500/15 to-emerald-950/40",
+    accentText: "text-emerald-400",
+    categoryTag: "STUDENTS • PROMOTION",
+    badgeText: "PROMOTION",
+    buttonLabel: "Promote Students",
+    getStat: () => ({
+      primary: "Advancement",
+      secondary: "Batch Promote Roster"
+    })
   }
 ];
 
@@ -159,7 +175,8 @@ export const AdminDashboardCards: React.FC<AdminDashboardCardsProps> = ({
   midterms = [],
   sbaRecords = [],
   nurseryChecklists = [],
-  setViewMode
+  setViewMode,
+  onOpenPromoteModal
 }) => {
   return (
     <div className="space-y-6">
@@ -180,6 +197,12 @@ export const AdminDashboardCards: React.FC<AdminDashboardCardsProps> = ({
             <div
               key={card.id}
               onClick={() => {
+                if (card.id === "promotion") {
+                  if (onOpenPromoteModal) {
+                    onOpenPromoteModal();
+                  }
+                  return;
+                }
                 setActiveTab(card.id);
                 if (setViewMode) setViewMode("workspace");
               }}

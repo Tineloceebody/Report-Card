@@ -1,0 +1,1002 @@
+  (reports ?? []).forEach(r => { if (isClassMatch(r.classId)) addName(r.studentName); });
+  (nurseryChecklists ?? []).forEach(c => { if (isClassMatch(c.classId)) addName(c.studentName); });
+  (weeklyTests ?? []).forEach(t => { if (isClassMatch(t.classId)) addName(t.studentName); });
+  (midterms ?? []).forEach(m => { if (isClassMatch(m.classId)) addName(m.studentName); });
+  (sbaRecords ?? []).forEach(s => { if (isClassMatch(s.classId)) addName(s.studentName); });
+  (termAttendanceRecords ?? []).forEach(a => { if (isClassMatch(a.classId)) addName(a.studentName); });
+    (reports || []).forEach(r => { if (r.classId === schoolClassId || normalizeDisplayValue(r.classId) === normalizeDisplayValue(schoolClassId)) addName(r.studentName); });
+    (weeklyTests || []).forEach(t => { if (t.classId === schoolClassId || normalizeDisplayValue(t.classId) === normalizeDisplayValue(schoolClassId)) addName(t.studentName); });
+    (midterms || []).forEach(m => { if (m.classId === schoolClassId || normalizeDisplayValue(m.classId) === normalizeDisplayValue(schoolClassId)) addName(m.studentName); });
+    (sbaRecords || []).forEach(s => { if (s.classId === schoolClassId || normalizeDisplayValue(s.classId) === normalizeDisplayValue(schoolClassId)) addName(s.studentName); });
+    (termAttendanceRecords || []).forEach(a => { if (a.classId === schoolClassId || normalizeDisplayValue(a.classId) === normalizeDisplayValue(schoolClassId)) addName(a.studentName); });
+    (nurseryChecklists || []).forEach(c => { if (c.classId === schoolClassId || normalizeDisplayValue(c.classId) === normalizeDisplayValue(schoolClassId)) addName(c.studentName); });
+  }, [reports, weeklyTests, midterms, sbaRecords, termAttendanceRecords, nurseryChecklists, schoolClassId]);
+};
+function WeeklyTestForm({
+  schoolClassId,
+  updateWeeklyTest,
+}: WeeklyTestFormProps) {
+    const studentMap = new Map<string, string>();
+    const addName = (name?: string) => {
+      const trimmed = name?.trim();
+      if (!trimmed) return;
+      const key = normalizeDisplayValue(trimmed);
+      if (!studentMap.has(key)) studentMap.set(key, trimmed);
+    };
+    reports.forEach(r => { if (r.classId === schoolClassId || normalizeDisplayValue(r.classId) === normalizeDisplayValue(schoolClassId)) addName(r.studentName); });
+    weeklyTests.forEach(t => { if (t.classId === schoolClassId || normalizeDisplayValue(t.classId) === normalizeDisplayValue(schoolClassId)) addName(t.studentName); });
+    return Array.from(studentMap.values()).sort((a, b) => a.localeCompare(b));
+  }, [reports, weeklyTests, schoolClassId]);
+
+  const teacherTests = useMemo(() => 
+    weeklyTests.filter(t => t.teacherId === activeTeacher.id && t.classId === schoolClassId),
+    [weeklyTests, activeTeacher.id, schoolClassId]
+  );
+
+  const allowedSubjectIds = activeTeacher.permissions?.find(p => p.classId === schoolClassId)?.subjectIds ?? [];
+  const allowedSubjects = SUBJECTS.filter(s => allowedSubjectIds.includes(s.id));
+  const isTerm3WeeklyTest = normalizeDisplayValue(term) === "term 3";
+  const plannedSubject = isTerm3WeeklyTest ? getTerm3WeeklySubject(week) : "";
+  const subjectOptions = plannedSubject ? [{ id: "term-3-planned-subject", name: plannedSubject }] : allowedSubjects;
+  const hasSubjectOption = subjectOptions.length > 0;
+
+  useEffect(() => {
+    if (plannedSubject && subject !== plannedSubject) {
+      setSubject(plannedSubject);
+    }
+  }, [plannedSubject, subject]);
+
+  useEffect(() => {
+    if (!academicYear || !term || !week) return;
+    const finalSubject = plannedSubject || getCanonicalSubjectName(subject);
+    if (!finalSubject) return;
+
+    const existingMap: Record<string, { score: string }> = {};
+    allStudentsInClass.forEach((sName) => {
+      const existingTest = weeklyTests.find(
+        (t) =>
+          t.classId === schoolClassId &&
+          normalizeDisplayValue(t.studentName) === normalizeDisplayValue(sName) &&
+          normalizeDisplayValue(t.academicYear) === normalizeDisplayValue(academicYear) &&
+          normalizeDisplayValue(t.term) === normalizeDisplayValue(term) &&
+          normalizeDisplayValue(t.weekLabel) === normalizeDisplayValue(week) &&
+          subjectNamesMatch(t.subject, finalSubject)
+      );
+      if (existingTest) {
+        existingMap[sName] = { score: String(existingTest.score) };
+      }
+    });
+    setBulkScores(existingMap);
+  }, [schoolClassId, academicYear, term, week, subject, plannedSubject, allStudentsInClass, weeklyTests]);
+
+  const handleBulkSubmit = async () => {
+    const entries = Object.entries(bulkScores ?? {}).filter(([_, data]) => data.score.trim() !== "");
+    if (entries.length === 0) return;
+    const finalSubject = plannedSubject || getCanonicalSubjectName(subject);
+
+    if (!academicYear) {
+      alert("Please select an Academic Year before submitting.");
+      return;
+    }
+    if (!term) {
+      alert("Please select a Term before submitting.");
+      return;
+    }
+    if (!finalSubject.trim()) {
+      alert("Please enter a Subject (e.g. Mathematics) before submitting.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      for (const [sName, data] of entries) {
+        const parsedScore = parseFloat(data.score);
+        const parsedMax = parseFloat(maxScore);
+        
+        if (isNaN(parsedScore) || isNaN(parsedMax)) continue;
+
+        await submitWeeklyTest({
+          teacherId: activeTeacher.id,
+          teacherName: activeTeacher.fullName,
+          classId: schoolClassId,
+          studentName: sName,
+          academicYear,
+          term: "Term 3",
+          weekLabel: week,
+          subject: finalSubject,
+          score: parsedScore,
+          maxScore: parsedMax,
+          remark: "",
+        });
+      }
+      setBulkScores({});
+      alert(`Successfully submitted ${entries.length} test scores!`);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const [expandedYear, setExpandedYear] = useState<string | null>(null);
+
+  const groupedByYear = useMemo(() => {
+    const groups: Record<string, Record<string, Record<string, WeeklyTest[]>>> = {};
+    
+    // Sort to ensure consistent grouping order
+    const sortedTests = [...teacherTests].sort((a, b) => {
+      const yearA = a.academicYear || "";
+      const yearB = b.academicYear || "";
+      if (yearA !== yearB) return yearB.localeCompare(yearA);
+
+      const termA = a.term || "";
+      const termB = b.term || "";
+      if (termA !== termB) return termA.localeCompare(termB);
+
+      const weekA = parseInt((a.weekLabel || "").replace(/\D/g, "")) || 0;
+      const weekB = parseInt((b.weekLabel || "").replace(/\D/g, "")) || 0;
+      if (weekA !== weekB) return weekA - weekB;
+
+      const subA = a.subject || "";
+      const subB = b.subject || "";
+      if (subA !== subB) return subA.localeCompare(subB);
+
+      const nameA = a.studentName || "";
+      const nameB = b.studentName || "";
+      return nameA.localeCompare(nameB);
+    });
+
+    sortedTests.forEach(t => {
+      if (!groups[t.academicYear]) groups[t.academicYear] = {};
+      if (!groups[t.academicYear][t.term]) groups[t.academicYear][t.term] = {};
+      if (!groups[t.academicYear][t.term][t.weekLabel]) groups[t.academicYear][t.term][t.weekLabel] = [];
+      groups[t.academicYear][t.term][t.weekLabel].push(t);
+    });
+    return groups;
+  }, [teacherTests]);
+
+  const handleBulkSubmitCount = Object.keys(bulkScores ?? {}).filter(k => (bulkScores ?? {})[k]?.score?.trim() !== "").length;
+
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-white">Bulk Input ({allStudentsInClass.length} Students)</h3>
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Academic Year <span className="text-rose-500">*</span>
+            </label>
+            <select
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
+              className={`w-full rounded-xl border bg-slate-950/60 px-3 py-2 text-sm outline-none transition focus:ring ${
+                !academicYear ? "border-rose-500/60 ring-rose-500/40 focus:ring" : "border-white/15 ring-amber-400"
+              }`}
+            >
+              <option value="">-- Select Year --</option>
+              <option value="2024/2025">2024/2025</option>
+              <option value="2025/2026">2025/2026</option>
+              <option value="2026/2027">2026/2027</option>
+            </select>
+            {!academicYear && <p className="mt-1 text-[10px] text-rose-400">Required before submitting</p>}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Term <span className="text-rose-500">*</span>
+            </label>
+            <select
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              className={`w-full rounded-xl border bg-slate-950/60 px-3 py-2 text-sm outline-none transition focus:ring ${
+                !term ? "border-rose-500/60 ring-rose-500/40 focus:ring" : "border-white/15 ring-amber-400"
+              }`}
+            >
+              <option value="">-- Select Term --</option>
+              <option value="Term 1">Term 1</option>
+              <option value="Term 2">Term 2</option>
+              <option value="Term 3">Term 3</option>
+            </select>
+            {!term && <p className="mt-1 text-[10px] text-rose-400">Required before submitting</p>}
+          </div>
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Week</label>
+            <select
+              value={week}
+              onChange={(e) => setWeek(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              {Array.from({ length: 13 }, (_, i) => `Week ${i + 1}`).map(w => (
+                <option key={w}>{w}</option>
+              ))}
+            </select>
+            {isTerm3WeeklyTest && (
+              <p className="mt-1 text-[10px] text-amber-400">
+                Term 3 plan: {getTerm3WeeklySubject(week) || "No weekly subject mapped yet"}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Subject <span className="text-rose-500">*</span>
+            </label>
+            {hasSubjectOption ? (
+              <select
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                disabled={Boolean(plannedSubject)}
+                className={`w-full rounded-xl border bg-slate-950/60 px-3 py-2 text-sm outline-none transition focus:ring disabled:cursor-not-allowed disabled:opacity-80 ${!subject ? "border-rose-500/60 ring-rose-500/40 focus:ring" : "border-white/15 ring-amber-400"}`}
+              >
+                <option value="">-- Select Subject --</option>
+                {subjectOptions.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            ) : (
+              <p className="text-xs text-rose-400">No subjects assigned for this class. Ask admin to assign subjects.</p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Max Score (Raw)</label>
+            <input
+              type="number"
+              value={maxScore}
+              onChange={(e) => setMaxScore(e.target.value)}
+              placeholder="100"
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3.5 py-2.5 text-base font-medium outline-none ring-amber-400 transition focus:ring"
+            />
+          </div>
+        </div>
+
+        <div className="max-h-[500px] overflow-y-auto rounded-xl border border-white/5 mobile-table-container">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead className="sticky top-0 z-10 bg-slate-950 text-[10px] md:text-xs uppercase tracking-wider text-slate-400">
+              <tr>
+                <th className="px-3 md:px-4 py-3 font-semibold">Student Name</th>
+                <th className="px-3 md:px-4 py-3 font-semibold w-32 md:w-44">Raw</th>
+                <th className="px-3 md:px-4 py-3 font-semibold text-center">Score</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {allStudentsInClass.map(sName => (
+                <tr key={sName} className="hover:bg-white/5 tap-highlight">
+                  <td className="px-3 md:px-4 py-3 text-slate-200 text-xs md:text-sm">{sName}</td>
+                  <td className="px-3 md:px-4 py-3">
+                    <input
+                      type="number"
+                      value={bulkScores[sName]?.score || ""}
+                      onChange={(e) => setBulkScores(prev => ({
+                        ...prev,
+                        [sName]: { ...prev[sName], score: e.target.value }
+                      }))}
+                      placeholder="0"
+                      className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3.5 py-2.5 text-sm md:text-base font-semibold outline-none focus:ring-2 focus:ring-amber-500 text-white transition"
+                    />
+                  </td>
+                  <td className="px-3 md:px-4 py-3 text-center text-amber-400 font-bold text-xs md:text-sm">
+                    {bulkScores[sName]?.score && maxScore ? ((parseFloat(bulkScores[sName].score) / parseFloat(maxScore)) * 20).toFixed(2) : "0.00"}
+                  </td>
+                </tr>
+              ))}
+              {allStudentsInClass.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-4 py-8 text-center text-slate-500 italic">
+                    No students found. Add them in the Comments tab.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        
+        <button
+          onClick={handleBulkSubmit}
+          disabled={isSubmitting || handleBulkSubmitCount === 0 || !academicYear || !term || !hasSubjectOption}
+          className="mt-4 w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 font-bold text-slate-950 transition hover:brightness-110 disabled:opacity-50"
+        >
+          {!academicYear || !term
+            ? "Select Year & Term to submit"
+            : isSubmitting
+            ? "Submitting Bulk Scores..."
+            : `Submit Scores for ${handleBulkSubmitCount} Students`}
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="flex items-center gap-2 font-semibold text-amber-200">
+          <span>📅</span> Test History
+        </h4>
+        {Object.entries(groupedByYear).map(([year, terms]) => (
+          <div key={year} className="space-y-2">
+            <button
+              onClick={() => setExpandedYear(expandedYear === year ? null : year)}
+              className="flex w-full items-center justify-between rounded-lg bg-white/5 p-2 text-left"
+            >
+              <span className="text-sm font-medium">{year}</span>
+              <ChevronDown className={`h-4 w-4 transition-transform ${expandedYear === year ? "rotate-180" : ""}`} />
+            </button>
+            <AnimatePresence>
+              {expandedYear === year && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="space-y-3 overflow-hidden pl-4"
+                >
+                  {Object.entries(terms).map(([termName, weeks]) => (
+                    <div key={termName} className="space-y-2">
+                      <p className="text-xs font-semibold text-amber-400/70 uppercase tracking-widest">{termName}</p>
+                      {Object.entries(weeks).map(([weekName, tests]) => (
+                        <div key={weekName} className="rounded-xl border border-white/5 bg-slate-900/40 p-3">
+                          <p className="mb-2 text-xs font-medium text-slate-400 underline decoration-amber-500/30">{weekName}</p>
+                          <div className="space-y-2">
+                            {tests.map(test => (
+                              <div key={test.id} className="flex items-center justify-between gap-3 border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                                {editingHistoryId === test.id ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 w-full bg-slate-950/80 p-2 rounded-lg border border-amber-500/30">
+                                    <div>
+                                      <p className="text-xs font-semibold text-amber-300">{test.studentName} — <span className="text-slate-300">{test.subject}</span></p>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-slate-400">Score:</span>
+                                          <input
+                                            type="number"
+                                            value={editScoreValue}
+                                            onChange={(e) => setEditScoreValue(e.target.value)}
+                                            className="w-24 rounded-lg border border-white/20 bg-slate-900 px-2.5 py-1 text-xs md:text-sm font-semibold outline-none text-white focus:ring-1 focus:ring-amber-400"
+                                          />
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-slate-400">/ Max:</span>
+                                          <input
+                                            type="number"
+                                            value={editMaxScoreValue}
+                                            onChange={(e) => setEditMaxScoreValue(e.target.value)}
+                                            className="w-24 rounded-lg border border-white/20 bg-slate-900 px-2.5 py-1 text-xs md:text-sm font-semibold outline-none text-white focus:ring-1 focus:ring-amber-400"
+                                          />
+                                        </div>
+                                        <span className="text-[10px] font-bold text-amber-400">
+                                          ({(parseFloat(editScoreValue) && parseFloat(editMaxScoreValue) ? (parseFloat(editScoreValue) / parseFloat(editMaxScoreValue) * 20).toFixed(2) : "0.00")}/20)
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => handleSaveEditTest(test.id)}
+                                        className="rounded bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600 transition"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        onClick={handleCancelEditTest}
+                                        className="rounded border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-white/10 transition"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div>
+                                      <p className="text-sm font-medium">{test.studentName}</p>
+                                      <p className="text-[10px] text-slate-400">
+                                        Subject: {test.subject} • Score: {test.score}/{test.maxScore} <span className="font-bold text-amber-400">({test.calculatedScore}/20)</span>
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleStartEditTest(test)}
+                                        className="text-blue-400 hover:text-blue-300 transition"
+                                        title="Edit score and max score"
+                                      >
+                                        <Edit2 className="h-4 w-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => confirm("Delete this entry?") && deleteWeeklyTest(test.id)}
+                                        className="text-rose-400 hover:text-rose-300 transition"
+                                        title="Delete entry"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        ))}
+        {teacherTests.length === 0 && <p className="text-center text-xs text-slate-500 py-4">No tests recorded yet.</p>}
+      </div>
+    </div>
+  );
+}
+
+type MidtermFormProps = {
+  schoolClassId: string;
+  activeTeacher: TeacherAccount;
+  midterms: Midterm[];
+  reports: CommentReport[];
+  submitMidterm: (data: Omit<Midterm, "id" | "submittedAt" | "calculatedScore">) => Promise<void>;
+  deleteMidterm: (id: string) => Promise<void>;
+};
+
+function MidtermForm({
+  schoolClassId,
+  activeTeacher,
+  midterms,
+  reports,
+  submitMidterm,
+  deleteMidterm,
+}: MidtermFormProps) {
+  const [academicYear, setAcademicYear] = useState("");
+  const [term, setTerm] = useState("");
+  const [subject, setSubject] = useState("");
+  const [bulkScores, setBulkScores] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const allowedSubjectIds = activeTeacher.permissions?.find(p => p.classId === schoolClassId)?.subjectIds ?? [];
+  const allowedSubjects = SUBJECTS.filter(s => allowedSubjectIds.includes(s.id));
+  const allStudentsInClass = useMemo(() => {
+    const studentMap = new Map<string, string>();
+    const addName = (name?: string) => {
+      const trimmed = name?.trim();
+      if (!trimmed) return;
+      const key = normalizeDisplayValue(trimmed);
+      if (!studentMap.has(key)) studentMap.set(key, trimmed);
+    };
+    (reports || []).forEach(r => { if (r.classId === schoolClassId || normalizeDisplayValue(r.classId) === normalizeDisplayValue(schoolClassId)) addName(r.studentName); });
+    (midterms || []).forEach(m => { if (m.classId === schoolClassId || normalizeDisplayValue(m.classId) === normalizeDisplayValue(schoolClassId)) addName(m.studentName); });
+    return Array.from(studentMap.values()).sort((a, b) => a.localeCompare(b));
+  }, [reports, midterms, schoolClassId]);
+
+  const teacherMidterms = useMemo(() => midterms.filter(m => m.teacherId === activeTeacher.id && m.classId === schoolClassId), [midterms, activeTeacher.id, schoolClassId]);
+  const [expandedSubject, setExpandedSubject] = useState<string | null>(null);
+  const groupedMidterms = useMemo(() => {
+    const sortedMidterms = [...teacherMidterms].sort((a, b) => {
+      const yearA = a.academicYear || "";
+      const yearB = b.academicYear || "";
+      if (yearA !== yearB) return yearB.localeCompare(yearA);
+
+      const termA = a.term || "";
+      const termB = b.term || "";
+      if (termA !== termB) return termA.localeCompare(termB);
+
+      const subA = a.subject || "";
+      const subB = b.subject || "";
+      if (subA !== subB) return subA.localeCompare(subB);
+
+      const nameA = a.studentName || "";
+      const nameB = b.studentName || "";
+      return nameA.localeCompare(nameB);
+    });
+
+    return sortedMidterms.reduce((groups, record) => {
+      const subjectGroup = groups[record.subject] ?? [];
+      subjectGroup.push(record);
+      groups[record.subject] = subjectGroup;
+      return groups;
+    }, {} as Record<string, Midterm[]>);
+  }, [teacherMidterms]);
+
+  useEffect(() => {
+    if (!academicYear || !term || !subject) return;
+
+    const existingMap: Record<string, string> = {};
+    allStudentsInClass.forEach((sName) => {
+      const existing = midterms.find(
+        (m) =>
+          m.classId === schoolClassId &&
+          normalizeDisplayValue(m.studentName) === normalizeDisplayValue(sName) &&
+          normalizeDisplayValue(m.academicYear) === normalizeDisplayValue(academicYear) &&
+          normalizeDisplayValue(m.term) === normalizeDisplayValue(term) &&
+          subjectNamesMatch(m.subject, subject)
+      );
+      if (existing) {
+        existingMap[sName] = String(existing.score);
+      }
+    });
+    setBulkScores(existingMap);
+  }, [schoolClassId, academicYear, term, subject, allStudentsInClass, midterms]);
+
+  const handleBulkSubmit = async () => {
+    if (!academicYear || !term || !subject) {
+      alert("Please complete the year, term, and subject before submitting.");
+      return;
+    }
+    if (!allowedSubjects.some(s => subjectNamesMatch(s.name, subject))) {
+      alert("Selected subject is not assigned to you for this class.");
+      return;
+    }
+
+    const entries = Object.entries(bulkScores).filter(([_, data]) => data.trim() !== "");
+    if (entries.length === 0) {
+      alert("Enter at least one midterm score before submitting.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      for (const [student, scoreValue] of entries) {
+        const parsedScore = parseFloat(scoreValue);
+        if (isNaN(parsedScore) || parsedScore < 0 || parsedScore > 100) {
+          continue;
+        }
+
+        await submitMidterm({
+          teacherId: activeTeacher.id,
+          teacherName: activeTeacher.fullName,
+          classId: schoolClassId,
+          studentName: student,
+          academicYear,
+          term,
+          subject,
+          score: parsedScore,
+          maxScore: 100,
+        });
+      }
+      setBulkScores({});
+      alert(`Successfully submitted midterms for ${entries.length} student(s).`);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to submit midterm scores. See console for details.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const filledCount = Object.values(bulkScores).filter((value) => value?.trim() !== "").length;
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-white">Midterm Exam Input</h3>
+          <span className="text-xs text-slate-400">Max Score: 100</span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
+            <select
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              <option value="">-- Select Year --</option>
+              <option value="2024/2025">2024/2025</option>
+              <option value="2025/2026">2025/2026</option>
+              <option value="2026/2027">2026/2027</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
+            <select
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              <option value="">-- Select Term --</option>
+              <option value="Term 1">Term 1</option>
+              <option value="Term 2">Term 2</option>
+              <option value="Term 3">Term 3</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-4">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Subject</label>
+            {allowedSubjects.length > 0 ? (
+              <select
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+              >
+                <option value="">-- Select Subject --</option>
+                {allowedSubjects.map((sub) => (
+                  <option key={sub.id} value={sub.name}>{sub.name}</option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-xs text-rose-400">No assigned subjects for this class.</p>
+            )}
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={handleBulkSubmit}
+              disabled={isSubmitting || filledCount === 0 || !academicYear || !term || allowedSubjects.length === 0}
+              className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:opacity-50"
+            >
+              {!academicYear || !term
+                ? "Select Year & Term to submit"
+                : isSubmitting
+                ? "Submitting..."
+                : `Submit ${filledCount} Midterm Score${filledCount === 1 ? "" : "s"}`}
+            </button>
+          </div>
+          <div className="flex items-center px-4 py-3 rounded-2xl border border-white/15 bg-slate-950/40">
+            <p className="text-xs text-slate-400">Filled: {filledCount}/{allStudentsInClass.length}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h4 className="text-lg font-semibold text-white">Enter Scores for All Students</h4>
+          <p className="text-xs text-slate-400">Empty rows are skipped</p>
+        </div>
+        <div className="max-h-[460px] overflow-x-auto overflow-y-auto rounded-xl border border-white/10">
+          <table className="min-w-full w-full text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-slate-950 text-[10px] md:text-xs uppercase tracking-wider text-slate-400">
+              <tr>
+                <th className="min-w-[160px] px-3 md:px-4 py-3 font-semibold">Student</th>
+                <th className="min-w-[200px] px-3 md:px-4 py-3 font-semibold">Score (/100)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {allStudentsInClass.map((name) => {
+                const value = bulkScores[name]?.trim() ?? "";
+                return (
+                  <tr key={name} className="hover:bg-white/5">
+                    <td className="px-3 md:px-4 py-3 text-slate-200 text-xs md:text-sm">{name}</td>
+                    <td className="px-3 md:px-4 py-3">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={value}
+                        onChange={(e) => setBulkScores((prev) => ({ ...prev, [name]: e.target.value }))}
+                        placeholder="0"
+                        className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-4 py-3.5 text-base font-semibold outline-none transition focus:ring-2 focus:ring-amber-500 text-white"
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+              {allStudentsInClass.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-4 py-8 text-center text-slate-500 italic">No students found. Add them in the Comments tab.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="mb-3 text-lg font-semibold text-white">Recent Midterms</h4>
+        {teacherMidterms.length === 0 ? (
+          <p className="text-sm text-slate-500">No midterm records yet for this class.</p>
+        ) : (
+          <div className="space-y-3">
+            {Object.keys(groupedMidterms).sort().map((subjectName) => {
+              const subjectRecords = groupedMidterms[subjectName];
+              return (
+                <div key={subjectName} className="rounded-2xl border border-white/10 bg-slate-950/30">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedSubject(expandedSubject === subjectName ? null : subjectName)}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-white"
+                  >
+                    <div>
+                      <p className="font-semibold">{subjectName}</p>
+                      <p className="text-[11px] text-slate-400">{subjectRecords.length} record{subjectRecords.length === 1 ? "" : "s"}</p>
+                    </div>
+                    <span className="text-amber-400 text-lg">{expandedSubject === subjectName ? "−" : "+"}</span>
+                  </button>
+                  {expandedSubject === subjectName && (
+                    <div className="space-y-2 border-t border-white/10 px-4 py-3">
+                      {subjectRecords.map((m) => (
+                        <div key={m.id} className="rounded-2xl border border-white/5 bg-slate-900/70 p-3 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-slate-100">{m.studentName}</p>
+                            <p className="text-[11px] text-slate-400">{m.academicYear} • {m.term}</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-amber-400 font-bold">{m.score}/100</span>
+                            <button
+                              onClick={() => confirm("Delete this midterm?") && deleteMidterm(m.id)}
+                              className="text-rose-400 hover:text-rose-300"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type SBAFieldFormProps = {
+  schoolClassId: string;
+  activeTeacher: TeacherAccount;
+  sbaRecords: SBARecord[];
+  reports: CommentReport[];
+  submitSbaRecord: (data: SBARecordInput) => Promise<void>;
+  mode: "project" | "group" | "exam";
+  title: string;
+  label: string;
+  maxScore: number;
+};
+
+function SBAFieldForm({
+  schoolClassId,
+  activeTeacher,
+  sbaRecords,
+  reports,
+  submitSbaRecord,
+  mode,
+  title,
+  label,
+  maxScore,
+}: SBAFieldFormProps) {
+  const [academicYear, setAcademicYear] = useState("");
+  const [term, setTerm] = useState("");
+  const [subject, setSubject] = useState("");
+  const [scores, setScores] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const allowedSubjectIds = activeTeacher.permissions?.find(p => p.classId === schoolClassId)?.subjectIds ?? [];
+  const allowedSubjects = SUBJECTS.filter(s => allowedSubjectIds.includes(s.id));
+
+  const allStudentsInClass = useMemo(() => {
+    const studentMap = new Map<string, string>();
+    const addName = (name?: string) => {
+      const trimmed = name?.trim();
+      if (!trimmed) return;
+      const key = normalizeDisplayValue(trimmed);
+      if (!studentMap.has(key)) studentMap.set(key, trimmed);
+    };
+    (reports || []).forEach(r => { if (r.classId === schoolClassId || normalizeDisplayValue(r.classId) === normalizeDisplayValue(schoolClassId)) addName(r.studentName); });
+    (sbaRecords || []).forEach(s => { if (s.classId === schoolClassId || normalizeDisplayValue(s.classId) === normalizeDisplayValue(schoolClassId)) addName(s.studentName); });
+    return Array.from(studentMap.values()).sort((a, b) => a.localeCompare(b));
+  }, [reports, sbaRecords, schoolClassId]);
+
+  const currentSbaRecords = useMemo(() => {
+    return sbaRecords.filter(record =>
+      record.teacherId === activeTeacher.id &&
+      record.classId === schoolClassId &&
+      record.academicYear === academicYear &&
+      record.term === term &&
+      subjectNamesMatch(record.subject, subject)
+    );
+  }, [sbaRecords, activeTeacher.id, schoolClassId, academicYear, term, subject]);
+
+  const getSbaRecordForStudent = (studentName: string) => {
+    return currentSbaRecords.find(record => record.studentName === studentName);
+  };
+
+  useEffect(() => {
+    if (!academicYear || !term || !subject) return;
+
+    const existingMap: Record<string, string> = {};
+    allStudentsInClass.forEach((sName) => {
+      const existing = sbaRecords.find(
+        (r) =>
+          r.classId === schoolClassId &&
+          normalizeDisplayValue(r.studentName) === normalizeDisplayValue(sName) &&
+          normalizeDisplayValue(r.academicYear) === normalizeDisplayValue(academicYear) &&
+          normalizeDisplayValue(r.term) === normalizeDisplayValue(term) &&
+          subjectNamesMatch(r.subject, subject)
+      );
+      if (existing) {
+        const val = mode === "group" ? existing.groupWorkScore : mode === "project" ? existing.projectWorkScore : existing.examScore;
+        if (val !== undefined && val !== null && val > 0) {
+          existingMap[sName] = String(val);
+        }
+      }
+    });
+    setScores(existingMap);
+  }, [schoolClassId, academicYear, term, subject, mode, allStudentsInClass, sbaRecords]);
+
+  const handleSaveAll = async () => {
+    if (!academicYear || !term || !subject) {
+      alert("Please select year, term, and subject before saving scores.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      for (const studentName of allStudentsInClass) {
+        const rawValue = scores[studentName]?.trim();
+        if (!rawValue) continue;
+
+        const existing = getSbaRecordForStudent(studentName);
+        const parsedScore = Number(parseFloat(rawValue).toFixed(2));
+        const payload: SBARecordInput = {
+          id: existing?.id,
+          teacherId: activeTeacher.id,
+          teacherName: activeTeacher.fullName,
+          classId: schoolClassId,
+          studentName,
+          academicYear,
+          term,
+          subject,
+          groupWorkScore: existing?.groupWorkScore ?? 0,
+          projectWorkScore: existing?.projectWorkScore ?? 0,
+          examScore: existing?.examScore ?? 0,
+        };
+
+        if (mode === "group") payload.groupWorkScore = parsedScore;
+        if (mode === "project") payload.projectWorkScore = parsedScore;
+        if (mode === "exam") payload.examScore = parsedScore;
+
+        await submitSbaRecord(payload);
+      }
+      alert(`Saved ${title.toLowerCase()} for ${allStudentsInClass.length} student(s).`);
+    } catch (error) {
+      console.error(error);
+      alert(`Failed to save ${title.toLowerCase()}. Please try again.`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <span className="text-xs text-slate-400">Max Score: {maxScore}</span>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
+            <select
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              <option value="">-- Select Year --</option>
+              <option value="2024/2025">2024/2025</option>
+              <option value="2025/2026">2025/2026</option>
+              <option value="2026/2027">2026/2027</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
+            <select
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              <option value="">-- Select Term --</option>
+              <option value="Term 1">Term 1</option>
+              <option value="Term 2">Term 2</option>
+              <option value="Term 3">Term 3</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Subject</label>
+            <select
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+            >
+              <option value="">-- Select Subject --</option>
+              {allowedSubjects.map((sub) => (
+                <option key={sub.id} value={sub.name}>{sub.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <button
+          onClick={handleSaveAll}
+          disabled={!academicYear || !term || !subject || allStudentsInClass.length === 0 || isSubmitting}
+          className="mt-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:opacity-50"
+        >
+          {isSubmitting ? "Saving..." : `Save ${label} Scores`}
+        </button>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-slate-950 text-[10px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-3">Student</th>
+              <th className="px-3 py-3 min-w-[200px]">{label} ({maxScore})</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {allStudentsInClass.map((studentName) => {
+              const existing = getSbaRecordForStudent(studentName);
+              const currentValue = existing ? (mode === "group" ? existing.groupWorkScore : mode === "project" ? existing.projectWorkScore : existing.examScore) : "";
+              return (
+                <tr key={studentName} className="hover:bg-white/5">
+                  <td className="px-3 py-3 font-medium text-slate-100">{studentName}</td>
+                  <td className="px-3 py-3">
+                    <input
+                      type="number"
+                      min="0"
+                      max={maxScore}
+                      value={scores[studentName] ?? currentValue ?? ""}
+                      onChange={(e) => setScores(prev => ({ ...prev, [studentName]: e.target.value }))}
+                      placeholder="0"
+                      className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-4 py-3 text-base font-semibold outline-none focus:ring-2 focus:ring-amber-500 text-white transition"
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+type SBAReportPanelProps = {
+  schoolClassId: string;
+  activeTeacher: TeacherAccount;
+  weeklyTests: WeeklyTest[];
+  midterms: Midterm[];
+  sbaRecords: SBARecord[];
+  reports: CommentReport[];
+  termAttendanceRecords: TermAttendanceRecord[];
+  reportSettings: ReportSettingsRecord[];
+  nurseryChecklists?: NurseryChecklistRecord[];
+};
+
+function SBAReportPanel({
+  schoolClassId,
+  activeTeacher,
+  weeklyTests,
+  midterms,
+  sbaRecords,
+  reports,
+  termAttendanceRecords,
+  reportSettings,
+  nurseryChecklists = [],
+}: SBAReportPanelProps) {
+  const [academicYear, setAcademicYear] = useState("2025/2026");
+  const [term, setTerm] = useState("Term 3");
+
+  const hasSetDefault = useRef(false);
+  useEffect(() => {
+    if (hasSetDefault.current || reports.length === 0) return;
+    const classReports = reports.filter((r: any) => r.classId === schoolClassId);
+    if (classReports.length > 0) {
+      const sorted = [...classReports].sort((a: any, b: any) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime());
+      const latest = sorted[0];
+      if (latest?.academicYear) setAcademicYear(latest.academicYear);
+      if (latest?.term) setTerm(latest.term);
+      hasSetDefault.current = true;
+    }
+  }, [schoolClassId, reports]);
+  const [subject, setSubject] = useState("");
+  const [weekLabel, setWeekLabel] = useState("");
+
+  const allowedSubjectIds = activeTeacher.permissions?.find(p => p.classId === schoolClassId)?.subjectIds ?? [];
+  const allowedSubjects = SUBJECTS.filter(s => allowedSubjectIds.includes(s.id));
+  const allStudentsInClass = useMemo(() => {
+    const studentMap = new Map<string, string>();
+    const addName = (name?: string) => {
+      const trimmed = name?.trim();
+      if (!trimmed) return;
+      const key = normalizeDisplayValue(trimmed);
+      if (!studentMap.has(key)) studentMap.set(key, trimmed);
+    };
+    reports.forEach(r => { if (r.classId === schoolClassId || normalizeDisplayValue(r.classId) === normalizeDisplayValue(schoolClassId)) addName(r.studentName); });
+    weeklyTests.forEach(t => { if (t.classId === schoolClassId || normalizeDisplayValue(t.classId) === normalizeDisplayValue(schoolClassId)) addName(t.studentName); });
+    midterms.forEach(m => { if (m.classId === schoolClassId || normalizeDisplayValue(m.classId) === normalizeDisplayValue(schoolClassId)) addName(m.studentName); });
+    sbaRecords.forEach(s => { if (s.classId === schoolClassId || normalizeDisplayValue(s.classId) === normalizeDisplayValue(schoolClassId)) addName(s.studentName); });
+    return Array.from(studentMap.values()).sort((a, b) => a.localeCompare(b));
+  }, [reports, weeklyTests, midterms, sbaRecords, schoolClassId]);

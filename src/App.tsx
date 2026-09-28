@@ -49,6 +49,8 @@ import {
   ChartsTooltip 
 } from '@mui/x-charts';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { MidtermForm, SBAFieldForm, SBAReportPanel } from "../missing_components";
+import { AcademicYearPicker } from "./components/AcademicYearPicker";
 
 const darkTheme = createTheme({
   palette: {
@@ -67,7 +69,7 @@ type ClassRoom = {
   name: string;
 };
 
-type TeacherAccount = {
+export type TeacherAccount = {
   id: string;
   fullName: string;
   username: string;
@@ -121,7 +123,7 @@ type WeeklyTest = {
   submittedAt: string;
 };
 
-type Midterm = {
+export type Midterm = {
   id: string;
   teacherId: string;
   teacherName: string;
@@ -136,12 +138,13 @@ type Midterm = {
   submittedAt: string;
 };
 
-type SBARecord = {
+export type SBARecord = {
   id: string;
   teacherId: string;
   teacherName: string;
   classId: string;
   studentName: string;
+  studentId?: string;
   academicYear: string;
   term: string;
   subject: string;
@@ -158,9 +161,28 @@ type TermAttendanceRecord = {
   academicYear: string;
   term: string;
   studentName: string;
+  studentId?: string;
   totalAttendance: number;
   totalPossible: number;
   submittedAt: string;
+};
+
+type PromotionHistoryRecord = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  sourceClassId: string;
+  sourceAcademicYear: string;
+  sourceTerm: string;
+  destClassId: string;
+  destAcademicYear: string;
+  destTerm: string;
+  destinationAttendanceRecordIds: string[];
+  promotedBy: "admin" | "teacher" | "principal";
+  promotedAt: string;
+  isReversed: boolean;
+  reversedAt?: string;
+  reversedBy?: "admin" | "teacher" | "principal";
 };
 
 type NurseryChecklistRecord = {
@@ -206,7 +228,7 @@ type ReportSettingsRecord = {
   reopeningDate: string;
 };
 
-type SBARecordInput = Omit<SBARecord, "id" | "submittedAt"> & Partial<Pick<SBARecord, "id">>;
+export type SBARecordInput = Omit<SBARecord, "id" | "submittedAt"> & Partial<Pick<SBARecord, "id">>;
 
 const SCHOOL_CLASSES: ClassRoom[] = [
   { id: "creche", name: "Creche" },
@@ -303,7 +325,7 @@ const NURSERY_QUESTIONS: NurseryQuestion[] = [
   { id: "music_3", category: "MUSIC, ART AND CREATIVITY", text: "Can he or she trace, fold, cut and paste?" }
 ];
 
-const SUBJECTS: { id: string; name: string }[] = [
+export const SUBJECTS: { id: string; name: string }[] = [
   { id: "english-language", name: "English Language" },
   { id: "mathematics", name: "Mathematics" },
   { id: "science", name: "Science" },
@@ -341,7 +363,7 @@ const REPORTS_STORAGE_KEY = "school-reports";
 const SESSION_KEY = "school-current-session";
 const SESSION_TIMEOUT_MS = 8 * 60 * 60 * 1000; // 8 hours of inactivity
 
-const normalizeDisplayValue = (value?: string) =>
+export const normalizeDisplayValue = (value?: string) =>
   (value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -371,12 +393,18 @@ const isStudentNameMatch = (nameA?: string, nameB?: string): boolean => {
   return false;
 };
 
-const standardizeTerm = (val?: string) => {
+export const standardizeTerm = (val?: string) => {
   const norm = normalizeDisplayValue(val);
   if (norm.includes("1")) return "term 1";
   if (norm.includes("2")) return "term 2";
   if (norm.includes("3")) return "term 3";
   return norm;
+};
+
+export const getCanonicalStudentId = (studentName?: string) => {
+  const normalized = normalizeDisplayValue(studentName);
+  if (!normalized) return "";
+  return normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 };
 
 const SUBJECT_NAME_ALIASES: Record<string, string> = {
@@ -460,7 +488,7 @@ const getBeceGrade = (score: number) => {
   return 9;
 };
 
-const getCanonicalSubjectName = (value?: string) => {
+export const getCanonicalSubjectName = (value?: string) => {
   const trimmed = value?.trim();
   if (!trimmed) return "";
 
@@ -481,7 +509,7 @@ const weeklyTestNeedsTerm3Update = (test: WeeklyTest) => {
   return test.term !== next.term || test.subject !== next.subject;
 };
 
-const subjectNamesMatch = (left?: string, right?: string) => {
+export const subjectNamesMatch = (left?: string, right?: string) => {
   return normalizeDisplayValue(getCanonicalSubjectName(left)) === normalizeDisplayValue(getCanonicalSubjectName(right));
 };
 
@@ -498,14 +526,16 @@ function getActiveClassStudents(
   midterms?: Midterm[],
   sbaRecords?: SBARecord[],
   nurseryChecklists?: NurseryChecklistRecord[],
-  termAttendanceRecords?: TermAttendanceRecord[]
+  termAttendanceRecords?: TermAttendanceRecord[],
+  promotionHistoryRecords: PromotionHistoryRecord[] = [],
+  excludePromotedIn: boolean = false
 ): string[] {
   const studentMap = new Map<string, string>(); // normalizedKey -> displayString
 
-  const addName = (name?: string) => {
+  const addName = (name?: string, studentId?: string) => {
     const trimmed = name?.trim();
     if (!trimmed) return;
-    const key = normalizeDisplayValue(trimmed);
+    const key = studentId ? normalizeDisplayValue(studentId) : normalizeDisplayValue(trimmed);
     if (!studentMap.has(key)) {
       studentMap.set(key, trimmed);
     }
@@ -516,20 +546,59 @@ function getActiveClassStudents(
   const isTermMatch = (t?: string) => standardizeTerm(t) === standardizeTerm(term);
 
   // 1. Term-specific matches
-  (reports ?? []).forEach(r => { if (isClassMatch(r.classId) && isYearMatch(r.academicYear) && isTermMatch(r.term)) addName(r.studentName); });
-  (nurseryChecklists ?? []).forEach(c => { if (isClassMatch(c.classId) && isYearMatch(c.academicYear) && isTermMatch(c.term)) addName(c.studentName); });
-  (weeklyTests ?? []).forEach(t => { if (isClassMatch(t.classId) && isYearMatch(t.academicYear) && isTermMatch(t.term)) addName(t.studentName); });
-  (midterms ?? []).forEach(m => { if (isClassMatch(m.classId) && isYearMatch(m.academicYear) && isTermMatch(m.term)) addName(m.studentName); });
-  (sbaRecords ?? []).forEach(s => { if (isClassMatch(s.classId) && isYearMatch(s.academicYear) && isTermMatch(s.term)) addName(s.studentName); });
-  (termAttendanceRecords ?? []).forEach(a => { if (isClassMatch(a.classId) && isYearMatch(a.academicYear) && isTermMatch(a.term)) addName(a.studentName); });
+  (reports ?? []).forEach(r => { if (isClassMatch(r.classId) && isYearMatch(r.academicYear) && isTermMatch(r.term)) addName(r.studentName, r.studentId); });
+  (nurseryChecklists ?? []).forEach(c => { if (isClassMatch(c.classId) && isYearMatch(c.academicYear) && isTermMatch(c.term)) addName(c.studentName, c.studentId); });
+  (weeklyTests ?? []).forEach(t => { if (isClassMatch(t.classId) && isYearMatch(t.academicYear) && isTermMatch(t.term)) addName(t.studentName, t.studentId); });
+  (midterms ?? []).forEach(m => { if (isClassMatch(m.classId) && isYearMatch(m.academicYear) && isTermMatch(m.term)) addName(m.studentName, m.studentId); });
+  (sbaRecords ?? []).forEach(s => { if (isClassMatch(s.classId) && isYearMatch(s.academicYear) && isTermMatch(s.term)) addName(s.studentName, s.studentId); });
+  (termAttendanceRecords ?? []).forEach(a => { if (isClassMatch(a.classId) && isYearMatch(a.academicYear) && isTermMatch(a.term)) addName(a.studentName, a.studentId); });
 
-  // 2. Class-wide fallback matches
-  (reports ?? []).forEach(r => { if (isClassMatch(r.classId) && isYearMatch(r.academicYear)) addName(r.studentName); });
-  (nurseryChecklists ?? []).forEach(c => { if (isClassMatch(c.classId) && isYearMatch(c.academicYear)) addName(c.studentName); });
-  (weeklyTests ?? []).forEach(t => { if (isClassMatch(t.classId) && isYearMatch(t.academicYear)) addName(t.studentName); });
-  (midterms ?? []).forEach(m => { if (isClassMatch(m.classId) && isYearMatch(m.academicYear)) addName(m.studentName); });
-  (sbaRecords ?? []).forEach(s => { if (isClassMatch(s.classId) && isYearMatch(s.academicYear)) addName(s.studentName); });
-  (termAttendanceRecords ?? []).forEach(a => { if (isClassMatch(a.classId) && isYearMatch(a.academicYear)) addName(a.studentName); });
+  // Add students promoted INTO this class for the selected academic year
+  (promotionHistoryRecords ?? []).forEach(ph => {
+    if (!ph.isReversed && isClassMatch(ph.destClassId) && (isYearMatch(ph.destAcademicYear) || !academicYear)) {
+      addName(ph.studentName, ph.studentId);
+    }
+  });
+
+  // Exclude students promoted OUT of this class
+  const promotedOutStudentKeys = new Set(
+    (promotionHistoryRecords ?? [])
+      .filter(ph =>
+        !ph.isReversed &&
+        isClassMatch(ph.sourceClassId) &&
+        (isYearMatch(ph.sourceAcademicYear) ||
+         isYearMatch(ph.destAcademicYear) ||
+         normalizeDisplayValue(ph.destClassId) !== normalizeDisplayValue(classId))
+      )
+      .map(ph => normalizeDisplayValue(ph.studentId || ph.studentName))
+  );
+
+  promotedOutStudentKeys.forEach(key => studentMap.delete(key));
+
+  // 2. Class-wide matches for the selected academic year
+  (reports ?? []).forEach(r => { if (isClassMatch(r.classId) && isYearMatch(r.academicYear)) addName(r.studentName, r.studentId); });
+  (nurseryChecklists ?? []).forEach(c => { if (isClassMatch(c.classId) && isYearMatch(c.academicYear)) addName(c.studentName, c.studentId); });
+  (weeklyTests ?? []).forEach(t => { if (isClassMatch(t.classId) && isYearMatch(t.academicYear)) addName(t.studentName, t.studentId); });
+  (midterms ?? []).forEach(m => { if (isClassMatch(m.classId) && isYearMatch(m.academicYear)) addName(m.studentName, m.studentId); });
+  (sbaRecords ?? []).forEach(s => { if (isClassMatch(s.classId) && isYearMatch(s.academicYear)) addName(s.studentName, s.studentId); });
+  (termAttendanceRecords ?? []).forEach(a => { if (isClassMatch(a.classId) && isYearMatch(a.academicYear)) addName(a.studentName, a.studentId); });
+
+  promotedOutStudentKeys.forEach(key => studentMap.delete(key));
+
+  // 3. Exclude students promoted INTO this class if requested (e.g. for Promotion Modal)
+  if (excludePromotedIn) {
+    const promotedInStudentKeys = new Set(
+      (promotionHistoryRecords ?? [])
+        .filter(ph =>
+          !ph.isReversed &&
+          normalizeDisplayValue(ph.destClassId) === normalizeDisplayValue(classId) &&
+          (normalizeDisplayValue(ph.destAcademicYear) === normalizeDisplayValue(academicYear) ||
+           normalizeDisplayValue(ph.sourceAcademicYear) === normalizeDisplayValue(academicYear))
+        )
+        .map(ph => normalizeDisplayValue(ph.studentId || ph.studentName))
+    );
+    promotedInStudentKeys.forEach(key => studentMap.delete(key));
+  }
 
   return Array.from(studentMap.values()).sort((a, b) => a.localeCompare(b));
 }
@@ -967,7 +1036,18 @@ function AdminSBAReport({
     const vacationDate = config?.vacationDate || "";
     const reopeningDate = config?.reopeningDate || "";
 
-    const activeStudents = getActiveClassStudents(classFilter, yearFilter, termFilter, reports, weeklyTests, midterms, sbaRecords);
+    const activeStudents = getActiveClassStudents(
+      classFilter,
+      yearFilter,
+      termFilter,
+      reports,
+      weeklyTests,
+      midterms,
+      sbaRecords,
+      undefined,
+      undefined,
+      promotionHistoryRecords,
+    );
     const classRoll = activeStudents.length || 1;
 
     const isNursery = classFilter === "creche" || classFilter === "nursery-1" || classFilter === "nursery-2";
@@ -1376,7 +1456,18 @@ function AdminSBAReport({
       return;
     }
 
-    const activeStudents = getActiveClassStudents(classFilter, yearFilter, termFilter, reports, weeklyTests, midterms, sbaRecords);
+    const activeStudents = getActiveClassStudents(
+      classFilter,
+      yearFilter,
+      termFilter,
+      reports,
+      weeklyTests,
+      midterms,
+      sbaRecords,
+      undefined,
+      undefined,
+      promotionHistoryRecords,
+    );
     const classRoll = activeStudents.length || 1;
 
     const sectionsHtml = selectedStudents.map((studentName) => {
@@ -1736,15 +1827,10 @@ function AdminSBAReport({
           </div>
           <div>
             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
-            <select
+            <AcademicYearPicker
               value={yearFilter}
-              onChange={(e) => setYearFilter(e.target.value)}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
-            >
-              <option value="2024/2025">2024/2025</option>
-              <option value="2025/2026">2025/2026</option>
-              <option value="2026/2027">2026/2027</option>
-            </select>
+              onChange={setYearFilter}
+            />
           </div>
           <div>
             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
@@ -2050,15 +2136,10 @@ ${sectionsHtml}
           </div>
           <div>
             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
-            <select
+            <AcademicYearPicker
               value={yearFilter}
-              onChange={(e) => setYearFilter(e.target.value)}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
-            >
-              <option value="2024/2025">2024/2025</option>
-              <option value="2025/2026">2025/2026</option>
-              <option value="2026/2027">2026/2027</option>
-            </select>
+              onChange={setYearFilter}
+            />
           </div>
           <div>
             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
@@ -2249,11 +2330,7 @@ function AdminMidtermReport({ midterms, teacherAccounts: _tas, classLookup }: Ad
   return (
     <div className="space-y-4">
       <div className="grid md:grid-cols-3 gap-3 mb-3">
-        <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} className="rounded-xl p-2 bg-slate-950/60">
-          <option>2024/2025</option>
-          <option>2025/2026</option>
-          <option>2026/2027</option>
-        </select>
+        <AcademicYearPicker value={yearFilter} onChange={setYearFilter} />
         <select value={termFilter} onChange={e => setTermFilter(e.target.value)} className="rounded-xl p-2 bg-slate-950/60">
           <option>Term 1</option>
           <option>Term 2</option>
@@ -2400,11 +2477,7 @@ function AttendancePanel({
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <label className="flex flex-col">
           <span className="mb-1 text-sm text-slate-400">Academic Year</span>
-          <select value={academicYear} onChange={(e) => setAcademicYear(e.target.value)} className="rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white">
-            <option value="2023/2024">2023/2024</option>
-            <option value="2024/2025">2024/2025</option>
-            <option value="2025/2026">2025/2026</option>
-          </select>
+          <AcademicYearPicker value={academicYear} onChange={setAcademicYear} />
         </label>
         <label className="flex flex-col">
           <span className="mb-1 text-sm text-slate-400">Term</span>
@@ -2731,10 +2804,19 @@ type PromoteStudentsModalProps = {
   sbaRecords: SBARecord[];
   nurseryChecklists: NurseryChecklistRecord[];
   termAttendanceRecords: TermAttendanceRecord[];
+  promotionHistoryRecords: PromotionHistoryRecord[];
 };
 
 function PromoteStudentsModal({
-  isOpen, onClose, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords
+  isOpen,
+  onClose,
+  reports,
+  weeklyTests,
+  midterms,
+  sbaRecords,
+  nurseryChecklists,
+  termAttendanceRecords,
+  promotionHistoryRecords,
 }: PromoteStudentsModalProps) {
   const [sourceYear, setSourceYear] = useState("2024/2025");
   const [sourceTerm, setSourceTerm] = useState("Term 3");
@@ -2744,17 +2826,65 @@ function PromoteStudentsModal({
   const [destTerm, setDestTerm] = useState("Term 1");
   const [destClass, setDestClass] = useState("basic-2");
 
+  const [excludePromotedIn, setExcludePromotedIn] = useState(true);
   const [students, setStudents] = useState<string[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
   const [isPromoting, setIsPromoting] = useState(false);
 
+  const promotedInRecords = useMemo(() => {
+    return (promotionHistoryRecords ?? []).filter(ph =>
+      !ph.isReversed &&
+      normalizeDisplayValue(ph.destClassId) === normalizeDisplayValue(sourceClass) &&
+      (normalizeDisplayValue(ph.destAcademicYear) === normalizeDisplayValue(sourceYear) ||
+       normalizeDisplayValue(ph.sourceAcademicYear) === normalizeDisplayValue(sourceYear))
+    );
+  }, [promotionHistoryRecords, sourceClass, sourceYear]);
+
   useEffect(() => {
     if (isOpen) {
-      const active = getActiveClassStudents(sourceClass, sourceYear, sourceTerm, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords);
+      const active = getActiveClassStudents(
+        sourceClass,
+        sourceYear,
+        sourceTerm,
+        reports,
+        weeklyTests,
+        midterms,
+        sbaRecords,
+        nurseryChecklists,
+        termAttendanceRecords,
+        promotionHistoryRecords,
+        excludePromotedIn,
+      );
       setStudents(active);
-      setSelectedStudents(new Set(active));
+
+      // Default select native students only
+      const nativeOnly = active.filter(name => {
+        const isPromotedIn = (promotionHistoryRecords ?? []).some(ph =>
+          !ph.isReversed &&
+          normalizeDisplayValue(ph.destClassId) === normalizeDisplayValue(sourceClass) &&
+          (normalizeDisplayValue(ph.destAcademicYear) === normalizeDisplayValue(sourceYear) ||
+           normalizeDisplayValue(ph.sourceAcademicYear) === normalizeDisplayValue(sourceYear)) &&
+          (normalizeDisplayValue(ph.studentName) === normalizeDisplayValue(name) ||
+           normalizeDisplayValue(ph.studentId) === normalizeDisplayValue(name))
+        );
+        return !isPromotedIn;
+      });
+      setSelectedStudents(new Set(nativeOnly));
     }
-  }, [sourceClass, sourceYear, sourceTerm, isOpen, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords]);
+  }, [
+    sourceClass,
+    sourceYear,
+    sourceTerm,
+    isOpen,
+    excludePromotedIn,
+    reports,
+    weeklyTests,
+    midterms,
+    sbaRecords,
+    nurseryChecklists,
+    termAttendanceRecords,
+    promotionHistoryRecords,
+  ]);
 
   const toggleStudent = (name: string) => {
     const next = new Set(selectedStudents);
@@ -2774,21 +2904,46 @@ function PromoteStudentsModal({
     setIsPromoting(true);
     try {
       const batch = writeBatch(db);
+      const timestamp = new Date().toISOString();
+
       selectedStudents.forEach((studentName) => {
-        const id = `${destClass}_${destYear.replace(/\//g, "-")}_${destTerm.replace(/\s+/g, "-")}_${normalizeDisplayValue(studentName)}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const docRef = doc(collection(db, "term_attendance_v1"), id);
-        batch.set(docRef, {
-          id,
+        const studentId = getCanonicalStudentId(studentName);
+        const attendanceId = `${destClass}_${destYear.replace(/\//g, "-")}_${destTerm.replace(/\s+/g, "-")}_${studentId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const attendanceRef = doc(collection(db, "term_attendance_v1"), attendanceId);
+
+        batch.set(attendanceRef, {
+          id: attendanceId,
           teacherId: "admin",
           classId: destClass,
           academicYear: destYear,
           term: destTerm,
           studentName,
+          studentId,
           totalAttendance: 0,
           totalPossible: 0,
-          submittedAt: new Date().toISOString(),
+          submittedAt: timestamp,
+        });
+
+        const historyId = `${sourceClass}_${sourceYear.replace(/\//g, "-")}_${sourceTerm.replace(/\s+/g, "-")}_${destClass}_${destYear.replace(/\//g, "-")}_${destTerm.replace(/\s+/g, "-")}_${studentId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const historyRef = doc(collection(db, "promotion_history_v1"), historyId);
+
+        batch.set(historyRef, {
+          id: historyId,
+          studentId,
+          studentName,
+          sourceClassId: sourceClass,
+          sourceAcademicYear: sourceYear,
+          sourceTerm,
+          destClassId: destClass,
+          destAcademicYear: destYear,
+          destTerm,
+          destinationAttendanceRecordIds: [attendanceId],
+          promotedBy: "admin",
+          promotedAt: timestamp,
+          isReversed: false,
         });
       });
+
       await batch.commit();
       alert("Students promoted successfully!");
       onClose();
@@ -2826,9 +2981,7 @@ function PromoteStudentsModal({
               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Source</h3>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Academic Year</label>
-                <select value={sourceYear} onChange={e => setSourceYear(e.target.value)} className="w-full rounded-xl bg-slate-800 border border-white/10 px-4 py-2.5 text-white outline-none focus:border-emerald-500">
-                  {["2023/2024", "2024/2025", "2025/2026", "2026/2027", "2027/2028"].map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+                <AcademicYearPicker value={sourceYear} onChange={setSourceYear} />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Term</label>
@@ -2847,9 +3000,7 @@ function PromoteStudentsModal({
               <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Destination</h3>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Academic Year</label>
-                <select value={destYear} onChange={e => setDestYear(e.target.value)} className="w-full rounded-xl bg-slate-800 border border-emerald-500/30 px-4 py-2.5 text-white outline-none focus:border-emerald-500">
-                  {["2024/2025", "2025/2026", "2026/2027", "2027/2028"].map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+                <AcademicYearPicker value={destYear} onChange={setDestYear} />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">Term</label>
@@ -2867,8 +3018,21 @@ function PromoteStudentsModal({
           </div>
 
           <div className="pt-6 border-t border-white/10">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-slate-300">Students to Promote ({selectedStudents.size}/{students.length})</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-sm font-semibold text-slate-300">Students to Promote ({selectedStudents.size}/{students.length})</h3>
+                {promotedInRecords.length > 0 && (
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400 hover:text-slate-300 select-none bg-slate-800/80 px-2.5 py-1 rounded-lg border border-white/10 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={excludePromotedIn}
+                      onChange={e => setExcludePromotedIn(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-slate-600 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer"
+                    />
+                    <span>Exclude promoted-in students ({promotedInRecords.length})</span>
+                  </label>
+                )}
+              </div>
               <div className="space-x-4 text-xs">
                 <button onClick={() => setSelectedStudents(new Set(students))} className="text-emerald-400 hover:text-emerald-300">Select All</button>
                 <button onClick={() => setSelectedStudents(new Set())} className="text-slate-400 hover:text-slate-300">Deselect All</button>
@@ -2880,18 +3044,93 @@ function PromoteStudentsModal({
                 No students found in the source class for the selected year and term.
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                {students.map(student => (
-                  <label key={student} className="flex items-center gap-3 p-3 rounded-xl bg-slate-800/80 border border-white/5 hover:border-white/20 cursor-pointer transition-colors">
-                    <input 
-                      type="checkbox" 
-                      checked={selectedStudents.has(student)} 
-                      onChange={() => toggleStudent(student)}
-                      className="w-5 h-5 rounded border-slate-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 bg-slate-900"
-                    />
-                    <span className="text-sm text-slate-200 truncate">{student}</span>
-                  </label>
-                ))}
+              <div className="overflow-hidden rounded-2xl border border-white/10">
+                <div className="overflow-y-auto max-h-72 custom-scrollbar">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-800 text-[10px] uppercase tracking-widest text-slate-400 border-b border-white/10">
+                      <tr>
+                        <th className="w-12 px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={students.length > 0 && selectedStudents.size === students.length}
+                            onChange={() => selectedStudents.size === students.length ? setSelectedStudents(new Set()) : setSelectedStudents(new Set(students))}
+                            className="w-4 h-4 rounded border-slate-600 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer"
+                            title="Select all / Deselect all"
+                          />
+                        </th>
+                        <th className="px-4 py-3 font-semibold">Student Name</th>
+                        <th className="px-4 py-3 font-semibold text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5 bg-slate-900/60">
+                      {students.map((student, idx) => {
+                        const isSelected = selectedStudents.has(student);
+                        const promoHistory = (promotionHistoryRecords ?? []).find(ph =>
+                          !ph.isReversed &&
+                          normalizeDisplayValue(ph.destClassId) === normalizeDisplayValue(sourceClass) &&
+                          (normalizeDisplayValue(ph.destAcademicYear) === normalizeDisplayValue(sourceYear) ||
+                           normalizeDisplayValue(ph.sourceAcademicYear) === normalizeDisplayValue(sourceYear)) &&
+                          (normalizeDisplayValue(ph.studentName) === normalizeDisplayValue(student) ||
+                           normalizeDisplayValue(ph.studentId) === normalizeDisplayValue(student))
+                        );
+
+                        return (
+                          <tr
+                            key={student}
+                            className={`transition-colors cursor-pointer ${
+                              isSelected
+                                ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                                : "hover:bg-white/5"
+                            }`}
+                            onClick={() => toggleStudent(student)}
+                          >
+                            <td className="px-4 py-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleStudent(student)}
+                                onClick={e => e.stopPropagation()}
+                                className="w-4 h-4 rounded border-slate-600 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                                  isSelected
+                                    ? "bg-emerald-500/20 text-emerald-300"
+                                    : "bg-slate-700/60 text-slate-400"
+                                }`}>
+                                  {idx + 1}
+                                </div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`font-medium ${
+                                    isSelected ? "text-slate-100" : "text-slate-400"
+                                  }`}>{student}</span>
+                                  {promoHistory && (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/30">
+                                      Promoted in from {SCHOOL_CLASSES.find(c => c.id === promoHistory.sourceClassId)?.name || promoHistory.sourceClassId}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {isSelected ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2.5 py-1 text-[10px] font-bold text-emerald-400">
+                                  ✓ Selected
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-slate-700/60 px-2.5 py-1 text-[10px] font-bold text-slate-500">
+                                  Skipped
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
@@ -3022,6 +3261,7 @@ export default function App() {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [termAttendanceRecords, setTermAttendanceRecords] = useState<TermAttendanceRecord[]>([]);
   const [reportSettings, setReportSettings] = useState<ReportSettingsRecord[]>([]);
+  const [promotionHistoryRecords, setPromotionHistoryRecords] = useState<PromotionHistoryRecord[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Authenticate with Firebase Anonymously to satisfy security rules
@@ -3117,6 +3357,16 @@ export default function App() {
       }
     );
 
+    const qPromotionHistory = query(collection(db, "promotion_history_v1"));
+    const unsubPromotionHistory = onSnapshot(qPromotionHistory,
+      (snapshot) => {
+        setPromotionHistoryRecords(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PromotionHistoryRecord)));
+      },
+      (error) => {
+        console.error("Promotion history listener error:", error);
+      }
+    );
+
     const qReportSettings = query(collection(db, "report_settings_v1"));
     const unsubReportSettings = onSnapshot(qReportSettings,
       (snapshot) => {
@@ -3145,6 +3395,7 @@ export default function App() {
       unsubSbaRecords();
       unsubAttendance();
       unsubTermAttendance();
+      unsubPromotionHistory();
       unsubReportSettings();
       unsubNursery();
     };
@@ -3775,6 +4026,7 @@ export default function App() {
     const normalizedData = {
       ...data,
       ...getTerm3WeeklyTestFields(data.weekLabel, data.subject, data.classId),
+      subject: getCanonicalSubjectName(data.subject),
     };
     const calculatedScore = (normalizedData.score / normalizedData.maxScore) * 20;
     try {
@@ -4283,9 +4535,19 @@ export default function App() {
                     Select an admin module card below to manage teacher accounts, assessment reports, broadsheets, and system settings.
                   </p>
                 </div>
-                <div className="flex items-center gap-2 rounded-full bg-white/5 px-3.5 py-1.5 border border-white/10 shrink-0">
-                  <div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                  <p className="text-xs font-semibold text-slate-200">Logged in: Administrator</p>
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsPromoteModalOpen(true)}
+                    className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500/20 via-teal-500/20 to-emerald-500/10 px-4 py-2 text-xs sm:text-sm font-bold text-emerald-300 transition-all hover:bg-emerald-500/30 hover:scale-[1.02] border border-emerald-500/40 shadow-lg shadow-emerald-500/10 active:scale-95 cursor-pointer"
+                  >
+                    <Users className="h-4 w-4 text-emerald-400" />
+                    <span>Promote Students</span>
+                  </button>
+                  <div className="flex items-center gap-2 rounded-full bg-white/5 px-3.5 py-1.5 border border-white/10 shrink-0">
+                    <div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                    <p className="text-xs font-semibold text-slate-200">Logged in: Administrator</p>
+                  </div>
                 </div>
               </div>
 
@@ -4300,6 +4562,7 @@ export default function App() {
                   nurseryChecklists={nurseryChecklists}
                   viewMode={adminViewMode}
                   setViewMode={setAdminViewMode}
+                  onOpenPromoteModal={() => setIsPromoteModalOpen(true)}
                 />
               ) : (
                 <div className="space-y-5">
@@ -4313,6 +4576,14 @@ export default function App() {
                         <span>Back to Admin Cards</span>
                       </button>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsPromoteModalOpen(true)}
+                      className="flex items-center gap-2 rounded-xl bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-300 transition-colors hover:bg-emerald-500/30 border border-emerald-500/30 shrink-0"
+                    >
+                      <Users className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>Promote Students</span>
+                    </button>
                   </div>
 
                   {/* Main Content Area - Full Width Workspace */}
@@ -4717,6 +4988,10 @@ export default function App() {
                         deleteSbaRecord={deleteSbaRecord}
                         submitTermAttendance={submitTermAttendance}
                         deleteStudentCompletely={deleteStudentCompletely}
+                        onOpenPromoteModal={() => setIsPromoteModalOpen(true)}
+                        promotionHistoryRecords={promotionHistoryRecords}
+                        reportSettings={reportSettings}
+                        nurseryChecklists={nurseryChecklists}
                       />
                     </motion.div>
                 )}
@@ -4727,7 +5002,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
                       className="space-y-6 rounded-3xl bg-slate-900/40 p-6 md:p-8 border border-white/5 shadow-2xl backdrop-blur-md"
                     >
-                      <div className="mb-6 flex items-center justify-between border-b border-white/5 pb-4">
+                      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-4">
                         <div className="flex items-center gap-3">
                           <div className="rounded-xl bg-amber-500/20 p-2.5 text-amber-400">
                             <Calendar className="h-6 w-6" />
@@ -4738,11 +5013,12 @@ export default function App() {
                           </div>
                         </div>
                         <button
+                          type="button"
                           onClick={() => setIsPromoteModalOpen(true)}
-                          className="flex items-center gap-2 rounded-xl bg-emerald-500/20 px-4 py-2.5 text-sm font-medium text-emerald-400 transition-colors hover:bg-emerald-500/30 border border-emerald-500/20"
+                          className="shrink-0 flex items-center gap-2 rounded-xl bg-emerald-500/20 px-4 py-2.5 text-sm font-medium text-emerald-400 transition-colors hover:bg-emerald-500/30 border border-emerald-500/30 cursor-pointer"
                         >
-                          <Users className="h-4 w-4" />
-                          Promote Students
+                          <Users className="h-4 w-4 text-emerald-400" />
+                          <span>Promote Students</span>
                         </button>
                       </div>
                       <AdminReportSettings 
@@ -4802,7 +5078,8 @@ export default function App() {
                     midterms,
                     sbaRecords,
                     nurseryChecklists,
-                    termAttendanceRecords
+                    termAttendanceRecords,
+                    promotionHistoryRecords,
                   )}
                   viewMode={teacherViewMode}
                   setViewMode={setTeacherViewMode}
@@ -4948,7 +5225,18 @@ export default function App() {
                           term="1st Term"
                           nurseryChecklists={nurseryChecklists}
                           activeTeacherId={activeTeacher.id}
-                          students={getActiveClassStudents(schoolClass.id, "2025/2026", "Term 3", reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords)}
+                          students={getActiveClassStudents(
+                            schoolClass.id,
+                            "2025/2026",
+                            "Term 3",
+                            reports,
+                            weeklyTests,
+                            midterms,
+                            sbaRecords,
+                            nurseryChecklists,
+                            termAttendanceRecords,
+                            promotionHistoryRecords,
+                          )}
                         />
                       )}
                       {teacherActiveTab === "comments" && (
@@ -4978,6 +5266,9 @@ export default function App() {
                           midterms={midterms}
                           sbaRecords={sbaRecords}
                           termAttendanceRecords={termAttendanceRecords}
+                          nurseryChecklists={nurseryChecklists}
+                          promotionHistoryRecords={promotionHistoryRecords}
+                          reportSettings={reportSettings}
                           submitWeeklyTest={submitWeeklyTest}
                           deleteWeeklyTest={deleteWeeklyTest}
                           updateWeeklyTest={updateWeeklyTest}
@@ -4992,6 +5283,8 @@ export default function App() {
                           weeklyTests={weeklyTests}
                           sbaRecords={sbaRecords}
                           termAttendanceRecords={termAttendanceRecords}
+                          nurseryChecklists={nurseryChecklists}
+                          promotionHistoryRecords={promotionHistoryRecords}
                           submitMidterm={submitMidterm}
                           deleteMidterm={deleteMidterm}
                         />
@@ -5005,6 +5298,8 @@ export default function App() {
                           weeklyTests={weeklyTests}
                           midterms={midterms}
                           termAttendanceRecords={termAttendanceRecords}
+                          nurseryChecklists={nurseryChecklists}
+                          promotionHistoryRecords={promotionHistoryRecords}
                           submitSbaRecord={submitSbaRecord}
                           mode="project"
                           title="Project Work Input"
@@ -5021,6 +5316,8 @@ export default function App() {
                           weeklyTests={weeklyTests}
                           midterms={midterms}
                           termAttendanceRecords={termAttendanceRecords}
+                          nurseryChecklists={nurseryChecklists}
+                          promotionHistoryRecords={promotionHistoryRecords}
                           submitSbaRecord={submitSbaRecord}
                           mode="group"
                           title="Group Work Input"
@@ -5037,6 +5334,8 @@ export default function App() {
                           weeklyTests={weeklyTests}
                           midterms={midterms}
                           termAttendanceRecords={termAttendanceRecords}
+                          nurseryChecklists={nurseryChecklists}
+                          promotionHistoryRecords={promotionHistoryRecords}
                           submitSbaRecord={submitSbaRecord}
                           mode="exam"
                           title="Exam Input"
@@ -5071,7 +5370,7 @@ export default function App() {
                       )}
                       {teacherActiveTab === "weekly-report" && (
                         <AdminWeeklyReport 
-                          weeklyTests={weeklyTests.filter(t => t.teacherId === activeTeacher.id)} 
+                          weeklyTests={weeklyTests.filter(t => t.teacherId === activeTeacher.id && t.classId === schoolClass.id)} 
                           teacherAccounts={teacherAccounts} 
                           classLookup={classLookup} 
                           readOnly={true}
@@ -5316,6 +5615,22 @@ export default function App() {
             </motion.section>
           )}
         </AnimatePresence>
+
+        <AnimatePresence>
+          {isPromoteModalOpen && (
+            <PromoteStudentsModal
+              isOpen={isPromoteModalOpen}
+              onClose={() => setIsPromoteModalOpen(false)}
+              reports={reports}
+              weeklyTests={weeklyTests}
+              midterms={midterms}
+              sbaRecords={sbaRecords}
+              nurseryChecklists={nurseryChecklists}
+              termAttendanceRecords={termAttendanceRecords}
+              promotionHistoryRecords={promotionHistoryRecords}
+            />
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );
@@ -5541,18 +5856,12 @@ function TeacherCommentForm({
 
       <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
         <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
-        <select
+        <AcademicYearPicker
           value={academicYear}
-          onChange={(event) =>
-            setDrafts((prev) => ({ ...prev, [`${draftKey}-year`]: event.target.value }))
-          }
-          className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-indigo-400 transition focus:ring"
-        >
-          <option value="">Select Year</option>
-          <option value="2024/2025">2024/2025</option>
-          <option value="2025/2026">2025/2026</option>
-          <option value="2026/2027">2026/2027</option>
-        </select>
+          onChange={(val) => setDrafts((prev) => ({ ...prev, [`${draftKey}-year`]: val }))}
+          allowEmpty
+          placeholder="Select Year"
+        />
       </div>
 
       <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
@@ -5863,7 +6172,13 @@ type WeeklyTestFormProps = {
   submitWeeklyTest: (data: Omit<WeeklyTest, "id" | "submittedAt" | "calculatedScore">) => Promise<void>;
   deleteWeeklyTest: (id: string) => Promise<void>;
   updateWeeklyTest?: (id: string, score: number, maxScore: number) => Promise<void>;
-  midterms?: MidtermRecord[];  sbaRecords?: SBARecord[];  termAttendanceRecords?: TermAttendanceRecord[];  nurseryChecklists?: NurseryChecklistRecord[];};
+  midterms?: Midterm[];
+  sbaRecords?: SBARecord[];
+  termAttendanceRecords?: TermAttendanceRecord[];
+  nurseryChecklists?: NurseryChecklistRecord[];
+  promotionHistoryRecords?: PromotionHistoryRecord[];
+  reportSettings?: ReportSettingsRecord[];
+};
 
 type NurseryChecklistFormProps = {
   schoolClassId: string;
@@ -6020,15 +6335,11 @@ function NurseryChecklistForm({
           </div>
           <div>
             <label className="block text-xs uppercase tracking-wide text-slate-400 font-semibold">Academic Year</label>
-            <select
+            <AcademicYearPicker
               value={academicYear}
-              onChange={(e) => setAcademicYear(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none text-white ring-amber-400 focus:ring"
-            >
-              <option value="2024/2025">2024/2025</option>
-              <option value="2025/2026">2025/2026</option>
-              <option value="2026/2027">2026/2027</option>
-            </select>
+              onChange={setAcademicYear}
+              className="mt-1"
+            />
           </div>
           <div>
             <label className="block text-xs uppercase tracking-wide text-slate-400 font-semibold">Term</label>
@@ -6154,19 +6465,40 @@ function NurseryChecklistForm({
   );
 }
 
-function WeeklyTestForm({ schoolClassId,
+function WeeklyTestForm({
+  schoolClassId,
   activeTeacher,
   weeklyTests,
   reports,
   submitWeeklyTest,
   deleteWeeklyTest,
-  updateWeeklyTest, midterms = [], sbaRecords = [], termAttendanceRecords = [], nurseryChecklists = [] }: WeeklyTestFormProps) {
-  const [academicYear, setAcademicYear] = useState("");
+  updateWeeklyTest,
+  midterms = [],
+  sbaRecords = [],
+  termAttendanceRecords = [],
+  nurseryChecklists = [],
+  promotionHistoryRecords = [],
+  reportSettings = [],
+}: WeeklyTestFormProps) {
+  const [academicYear, setAcademicYear] = useState("2025/2026");
   const [term, setTerm] = useState("Term 3");
   const [week, setWeek] = useState("Week 1");
   const [subject, setSubject] = useState("");
   const [maxScore, setMaxScore] = useState("100");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const hasSetDefaultYear = useRef(false);
+  useEffect(() => {
+    if (hasSetDefaultYear.current || !reports || reports.length === 0) return;
+    const classReports = reports.filter((r: any) => r.classId === schoolClassId);
+    if (classReports.length > 0) {
+      const sorted = [...classReports].sort((a: any, b: any) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime());
+      const latest = sorted[0];
+      if (latest?.academicYear) setAcademicYear(latest.academicYear);
+      if (latest?.term) setTerm(latest.term);
+      hasSetDefaultYear.current = true;
+    }
+  }, [schoolClassId, reports]);
 
   const [bulkScores, setBulkScores] = useState<Record<string, { score: string }>>({});
 
@@ -6201,922 +6533,427 @@ function WeeklyTestForm({ schoolClassId,
   };
 
   const allStudentsInClass = useMemo(() => {
-    return getActiveClassStudents(schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords);
-  }, [schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords]);
+    return getActiveClassStudents(
+      schoolClassId,
+      academicYear,
+      term,
+      reports,
+      weeklyTests,
+      midterms,
+      sbaRecords,
+      nurseryChecklists,
+      termAttendanceRecords,
+      promotionHistoryRecords,
+    );
+  }, [schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists, termAttendanceRecords, promotionHistoryRecords]);
 
-  const weekOptions = useMemo(() => {
-    const weeks = new Set<string>();
-    weeklyTests.forEach(test => {
-      if (
-        test.classId === schoolClassId &&
-        (!academicYear || normalizeDisplayValue(test.academicYear) === normalizeDisplayValue(academicYear)) &&
-        (!term || normalizeDisplayValue(test.term) === normalizeDisplayValue(term)) &&
-        (!subject || subjectNamesMatch(test.subject, subject))
-      ) {
-        weeks.add(test.weekLabel);
-      }
-    });
-    return Array.from(weeks).sort((a, b) => parseInt(a.replace(/\D/g, ""), 10) - parseInt(b.replace(/\D/g, ""), 10));
-  }, [weeklyTests, schoolClassId, academicYear, term, subject]);
+  const teacherTests = useMemo(() => 
+    weeklyTests.filter(t => t.teacherId === activeTeacher?.id && t.classId === schoolClassId),
+    [weeklyTests, activeTeacher?.id, schoolClassId]
+  );
+
+  const allowedSubjectIds = activeTeacher?.permissions?.find(p => p.classId === schoolClassId)?.subjectIds ?? [];
+  const allowedSubjects = SUBJECTS.filter(s => allowedSubjectIds.includes(s.id));
+  const baseSubjects = allowedSubjects.length > 0 ? allowedSubjects : SUBJECTS;
+  const isTerm3WeeklyTest = normalizeDisplayValue(term) === "term 3";
+  const plannedSubject = isTerm3WeeklyTest ? getTerm3WeeklySubject(week, schoolClassId) : "";
+
+  const subjectOptions = useMemo(() => {
+    const list = [...baseSubjects];
+    if (plannedSubject && !list.some(s => subjectNamesMatch(s.name, plannedSubject))) {
+      list.unshift({ id: "term-3-planned-subject", name: plannedSubject });
+    }
+    return list;
+  }, [baseSubjects, plannedSubject]);
+  const hasSubjectOption = subjectOptions.length > 0;
+
+  // When plannedSubject changes (e.g. week or class changes in Term 3), default to it
+  useEffect(() => {
+    if (plannedSubject) {
+      setSubject(plannedSubject);
+    }
+  }, [plannedSubject]);
 
   useEffect(() => {
-    if (weekOptions.length === 0) {
-      setWeekLabel("");
-      return;
-    }
-    setWeekLabel((current) => (current && weekOptions.includes(current) ? current : weekOptions[0]));
-  }, [weekOptions]);
+    if (!academicYear || !term || !week) return;
+    const finalSubject = getCanonicalSubjectName(subject);
+    if (!finalSubject) return;
 
-  const getWeeklyTestScore = (studentName: string) => {
-    const subjectTests = weeklyTests.filter(
-      (test) =>
-        test.classId === schoolClassId &&
-        normalizeDisplayValue(test.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(test.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(test.term) === standardizeTerm(term) &&
-        subjectNamesMatch(test.subject, subject)
-    );
-    return subjectTests.length > 0
-      ? Number((subjectTests.reduce((sum, t) => sum + (t.calculatedScore ?? 0), 0) / subjectTests.length).toFixed(2))
-      : 0;
-  };
-
-  const getMidtermScore = (studentName: string) => {
-    const record = midterms
-      .filter(m =>
-        m.classId === schoolClassId &&
-        normalizeDisplayValue(m.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(m.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(m.term) === standardizeTerm(term) &&
-        subjectNamesMatch(m.subject, subject)
-      )
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
-    if (!record || record.score <= 0) return 5;
-    return Number(((record.score / 100) * 20).toFixed(2));
-  };
-
-  const getSbaValue = (studentName: string, field: "groupWorkScore" | "projectWorkScore" | "examScore") => {
-    const record = sbaRecords
-      .filter(entry =>
-        entry.classId === schoolClassId &&
-        normalizeDisplayValue(entry.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(entry.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(entry.term) === standardizeTerm(term) &&
-        subjectNamesMatch(entry.subject, subject)
-      )
-      .sort((a, b) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime())[0];
-    return record?.[field] ?? 0;
-  };
-
-  const getReportRemark = (score: number) => {
-    if (score >= 80) return "A";
-    if (score > 69) return "AP";
-    if (score > 59) return "D";
-    return "B";
-  };
-
-  const getStudentReportSubjects = (studentName: string) => {
-    const subjects = new Set<string>();
-    const addSubjectIfValid = (subj: string) => {
-      const canonical = getCanonicalSubjectName(subj);
-      if (canonical && canonical.toLowerCase() !== "unknown subject" && canonical.toLowerCase() !== "unknown") {
-        subjects.add(canonical);
-      }
-    };
-    weeklyTests.forEach(test => {
-      if (
-        test.classId === schoolClassId &&
-        normalizeDisplayValue(test.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(test.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(test.term) === standardizeTerm(term)
-      ) addSubjectIfValid(test.subject);
-    });
-    midterms.forEach(m => {
-      if (
-        m.classId === schoolClassId &&
-        normalizeDisplayValue(m.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(m.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(m.term) === standardizeTerm(term)
-      ) addSubjectIfValid(m.subject);
-    });
-    sbaRecords.forEach(record => {
-      if (
-        record.classId === schoolClassId &&
-        normalizeDisplayValue(record.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(record.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(record.term) === standardizeTerm(term)
-      ) addSubjectIfValid(record.subject);
-    });
-    return Array.from(subjects).sort();
-  };
-
-  const getStudentSubjectReport = (studentName: string, subjectName: string) => {
-    const subjectTests = weeklyTests.filter(
-      (test) =>
-        test.classId === schoolClassId &&
-        normalizeDisplayValue(test.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(test.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(test.term) === standardizeTerm(term) &&
-        subjectNamesMatch(test.subject, subjectName)
-    );
-    const weeklyValue = subjectTests.length > 0
-      ? Number((subjectTests.reduce((sum, t) => sum + (t.calculatedScore ?? 0), 0) / subjectTests.length).toFixed(2))
-      : 0;
-
-    const midterm = midterms
-      .filter(m =>
-        m.classId === schoolClassId &&
-        normalizeDisplayValue(m.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(m.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(m.term) === standardizeTerm(term) &&
-        subjectNamesMatch(m.subject, subjectName)
-      )
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
-
-    const sbaRecord = sbaRecords
-      .filter(entry =>
-        entry.classId === schoolClassId &&
-        normalizeDisplayValue(entry.studentName) === normalizeDisplayValue(studentName) &&
-        normalizeDisplayValue(entry.academicYear) === normalizeDisplayValue(academicYear) &&
-        standardizeTerm(entry.term) === standardizeTerm(term) &&
-        subjectNamesMatch(entry.subject, subjectName)
-      )
-      .sort((a, b) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime())[0];
-
-    const midtermValue = (!midterm || midterm.score <= 0) ? 5 : Number(((midterm.score / 100) * 20).toFixed(2));
-    const groupWorkScore = Number(sbaRecord?.groupWorkScore ?? 0);
-    const projectWorkScore = Number(sbaRecord?.projectWorkScore ?? 0);
-    const examScore = Number(sbaRecord?.examScore ?? 0);
-
-    const total60 = weeklyValue + midtermValue + groupWorkScore + projectWorkScore;
-    const classScore = Number(((total60 / 60) * 50).toFixed(2));
-    const examScoreSubtotal = Number((examScore * 0.5).toFixed(2));
-    const total = Number((classScore + examScoreSubtotal).toFixed(2));
-
-    const deficits: string[] = [];
-    if (weeklyValue === 0) deficits.push("Weekly Tests");
-    if (!midterm || midterm.score <= 0) deficits.push("Midterm");
-    if (groupWorkScore === 0) deficits.push("Group Work");
-    if (projectWorkScore === 0) deficits.push("Project Work");
-    if (examScore === 0) deficits.push("Exam");
-
-    const isSbaIncomplete = deficits.length > 0;
-
-    const remark = isSbaIncomplete ? "IC" : getReportRemark(total);
-
-    return {
-      subjectName,
-      classScore,
-      examScoreSubtotal,
-      total,
-      remark,
-      deficits,
-      weeklyValue,
-      midtermValue,
-      groupWorkScore,
-      projectWorkScore,
-      examScore,
-      total60
-    };
-  };
-
-  const getStudentReportCardData = (studentName: string) => {
-    const subjects = getStudentReportSubjects(studentName);
-    const rows = subjects.map((subjectName) => getStudentSubjectReport(studentName, subjectName));
-    const totalMarks = Number(rows.reduce((sum, row) => sum + row.total, 0).toFixed(2));
-    const average = subjects.length ? Number((totalMarks / subjects.length).toFixed(2)) : 0;
-    const overallRemark = getReportRemark(average);
-    return { subjects, rows, totalMarks, average, overallRemark };
-  };
-
-
-
-  const handlePrintStudentReportCard = (studentName: string) => {
-    const isNursery = schoolClassId === "creche" || schoolClassId === "nursery-1" || schoolClassId === "nursery-2";
-    if (!academicYear || !term || (!isNursery && !weekLabel)) {
-      alert("Select year and term before printing a report card.");
-      return;
-    }
-
-    if (isNursery) {
-      const config = reportSettings.find(
-        (s) => normalizeDisplayValue(s.academicYear) === normalizeDisplayValue(academicYear) &&
-               normalizeDisplayValue(s.term) === normalizeDisplayValue(term)
+    const existingMap: Record<string, { score: string }> = {};
+    allStudentsInClass.forEach((sName) => {
+      const existingTest = weeklyTests.find(
+        (t) =>
+          t.classId === schoolClassId &&
+          normalizeDisplayValue(t.studentName) === normalizeDisplayValue(sName) &&
+          normalizeDisplayValue(t.academicYear) === normalizeDisplayValue(academicYear) &&
+          normalizeDisplayValue(t.term) === normalizeDisplayValue(term) &&
+          normalizeDisplayValue(t.weekLabel) === normalizeDisplayValue(week) &&
+          subjectNamesMatch(t.subject, finalSubject)
       );
-      const vacationDate = config?.vacationDate || "";
-      const reopeningDate = config?.reopeningDate || "";
-
-      const activeStudents = getActiveClassStudents(schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords, nurseryChecklists);
-      const classRoll = activeStudents.length || 1;
-
-      const nurseryHtml = getNurseryReportCardHtml(
-        studentName,
-        schoolClassId,
-        academicYear,
-        term,
-        reopeningDate,
-        vacationDate,
-        classRoll,
-        nurseryChecklists,
-        reports,
-        termAttendanceRecords
-      );
-
-      const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <base href="${typeof window !== 'undefined' ? window.location.origin : ''}/" />
-  <title>Report Card - ${studentName}</title>
-  <style>
-    @page { margin: 10mm; }
-    @media print {
-      body { margin: 0; padding: 0; background: #fff; }
-      .page-container {
-        page-break-after: always !important;
-        page-break-inside: avoid !important;
+      if (existingTest) {
+        existingMap[sName] = { score: String(existingTest.score) };
       }
-      .page-container:last-child {
-        page-break-after: avoid !important;
-      }
-    }
-  </style>
-</head>
-<body style="font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; background: #fff;">
-  ${nurseryHtml}
-  <script>window.onload = () => window.print();</script>
-</body>
-</html>`;
-
-      const win = window.open("", "_blank", "width=900,height=700");
-      if (!win) {
-        alert("Pop-up blocked. Please allow pop-ups for this site.");
-        return;
-      }
-      win.document.write(html);
-      win.document.close();
-      return;
-    }
-
-    const config = reportSettings.find(
-      (s) => normalizeDisplayValue(s.academicYear) === normalizeDisplayValue(academicYear) &&
-             normalizeDisplayValue(s.term) === normalizeDisplayValue(term)
-    );
-    const vacationDate = config?.vacationDate || "";
-    const reopeningDate = config?.reopeningDate || "";
-
-    const activeStudents = getActiveClassStudents(schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords);
-    const classRoll = activeStudents.length || 1;
-
-    const report = getStudentReportCardData(studentName);
-    const className = SCHOOL_CLASSES.find((c) => c.id === schoolClassId)?.name ?? schoolClassId;
-
-    // Fetch report details
-    const reportDoc = reports.find(
-      r => normalizeDisplayValue(r.studentName) === normalizeDisplayValue(studentName) &&
-           r.classId === schoolClassId &&
-           normalizeDisplayValue(r.academicYear) === normalizeDisplayValue(academicYear) &&
-           normalizeDisplayValue(r.term) === normalizeDisplayValue(term)
-    );
-    const sex = reportDoc?.sex || "";
-    const conduct = reportDoc?.conduct || "";
-    const attitude = reportDoc?.attitude || "";
-    const interest = reportDoc?.interest || "";
-    const commentText = reportDoc?.comment || "";
-
-    // Fetch attendance
-    let attRecord = termAttendanceRecords.find(
-      a => normalizeDisplayValue(a.studentName) === normalizeDisplayValue(studentName) &&
-           normalizeDisplayValue(a.classId) === normalizeDisplayValue(schoolClassId) &&
-           normalizeDisplayValue(a.academicYear) === normalizeDisplayValue(academicYear) &&
-           normalizeDisplayValue(a.term) === normalizeDisplayValue(term)
-    );
-    if (!attRecord) {
-      attRecord = termAttendanceRecords.find(
-        a => normalizeDisplayValue(a.studentName) === normalizeDisplayValue(studentName) &&
-             normalizeDisplayValue(a.academicYear) === normalizeDisplayValue(academicYear) &&
-             normalizeDisplayValue(a.term) === normalizeDisplayValue(term)
-      );
-    }
-    const attendanceVal = attRecord
-      ? (attRecord.totalPossible ? `${attRecord.totalAttendance} / ${attRecord.totalPossible}` : `${attRecord.totalAttendance}`)
-      : "";
-
-    // Calculate class averages and BECE grades for printedRows
-    const printedRows = report.subjects.map((subName) => {
-      const row = getStudentSubjectReport(studentName, subName);
-      const totals = activeStudents.map(name => getStudentSubjectReport(name, subName).total).filter(t => t > 0);
-      const classAvg = totals.length > 0 ? Number((totals.reduce((a, b) => a + b, 0) / totals.length).toFixed(1)) : 0;
-      const grade = getBeceGrade(row.total);
-      return {
-        ...row,
-        classAvg,
-        grade,
-      };
     });
+    setBulkScores(existingMap);
+  }, [schoolClassId, academicYear, term, week, subject, allStudentsInClass, weeklyTests]);
 
-    const totalClassScore = printedRows.reduce((sum, r) => sum + r.classScore, 0);
-    const totalExamScore = printedRows.reduce((sum, r) => sum + r.examScoreSubtotal, 0);
-    const totalScore = printedRows.reduce((sum, r) => sum + r.total, 0);
-    const totalClassAverage = printedRows.reduce((sum, r) => sum + r.classAvg, 0);
+  const handleBulkSubmit = async () => {
+    const entries = Object.entries(bulkScores ?? {}).filter(([_, data]) => data.score.trim() !== "");
+    if (entries.length === 0) return;
+    const finalSubject = getCanonicalSubjectName(subject);
 
-    const rowsHtml = printedRows.map((row) => `
-      <tr style="border: 1px solid #000;">
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 11px; font-weight: 500;">${row.subjectName.toUpperCase()}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 11.5px; font-weight: 600; text-align: center;">${row.classScore.toFixed(1)}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 11.5px; font-weight: 600; text-align: center;">${row.examScoreSubtotal.toFixed(1)}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 12px; font-weight: bold; text-align: center;">${row.total.toFixed(1)}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 12px; font-weight: bold; text-align: center;">${row.grade}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 11px; text-align: center;">${row.classAvg.toFixed(1)}</td>
-        <td style="border: 1px solid #000; padding: 3.5px 5px; font-size: 11.5px; font-weight: 600; text-align: center;">${row.remark}</td>
-      </tr>
-    `).join("");
-
-    const deficitsList = printedRows
-      .filter(row => row.remark === "IC" && row.deficits && row.deficits.length > 0)
-      .map(row => `${row.subjectName} (${row.deficits.join(", ")})`)
-      .join(", ");
-
-    const deficitsHtml = deficitsList
-      ? `<div style="margin-top: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000; padding: 6px; background: #fff; font-family:'Segoe UI', Arial, sans-serif;">Outstanding Subject(s): ${deficitsList}</div>`
-      : "";
-
-    // SVG Bar Chart
-    const svgWidth = 730;
-    const svgHeight = 90;
-    const numSubjects = printedRows.length || 1;
-    const slotWidth = svgWidth / numSubjects;
-    const barWidth = 20;
-
-    const svgBars = printedRows.map((r, idx) => {
-      const xCenter = 50 + idx * slotWidth + slotWidth / 2;
-      const barX = xCenter - barWidth / 2;
-      const score = r.total;
-      const barHeight = score * 0.8; // scale down
-      const barY = 90 - barHeight;
-
-      const displayLabel = r.subjectName.toUpperCase() === "R. M. E" ? "R.M.E" : r.subjectName.toUpperCase();
-      const words = displayLabel.split(" ");
-      const tspans = words.map((w, wIdx) => `<tspan x="${xCenter}" dy="${wIdx === 0 ? 0 : 8}">${w}</tspan>`).join("");
-
-      return `
-        <rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" fill="#52525b" />
-        <text x="${xCenter}" y="101" font-size="7" font-family="'Segoe UI', Arial, sans-serif" text-anchor="middle" font-weight="bold">
-          ${tspans}
-        </text>
-      `;
-    }).join("");
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${studentName}</title>
-  <style>
-    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #0f172a; background: #fff; }
-    .page { 
-      width: 100vw; 
-      height: 98vh; 
-      max-height: 98vh; 
-      box-sizing: border-box; 
-      page-break-after: always; 
-      page-break-inside: avoid;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 10px;
-    }
-    .page:last-child { page-break-after: auto; }
-    @media print { 
-      body { margin: 0; padding: 0; } 
-      .page { 
-        height: 100vh; 
-        max-height: 100vh; 
-        padding: 5mm; 
-        page-break-after: always; 
-        page-break-inside: avoid; 
-        box-sizing: border-box;
-      } 
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <div style="border: 1.5px solid #000; padding: 8px 10px; width: 100%; box-sizing: border-box;">
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 2px solid #000; padding-bottom: 4px;">
-        <div style="width: 95px; display: flex; align-items: center; justify-content: center;">
-          <img src="/ybs.png" alt="YBS Logo" style="width: 81px; height: 81px; object-fit: contain;" />
-        </div>
-        <div style="flex: 1; text-align: center;">
-          <div style="font-size:22.5px; font-weight:800; font-family:'Outfit', 'Segoe UI', Arial, sans-serif; letter-spacing: 0.5px; line-height: 1.1;">YERIEL BRACHA SCHOOL</div>
-          <div style="font-size:10px; font-weight:700; margin-top:2px;">P. O. BOX DT 2962, Adenta- Accra</div>
-          <div style="font-size:10px; font-weight:700;">Tel: 026668550</div>
-          <div style="font-size:10px; font-style:italic; font-weight:700; margin-top:2px;">Motto : Head Heart Hand</div>
-          <div style="font-size:13px; font-weight:800; margin-top:3px; letter-spacing: 1px; text-decoration: underline;">STUDENT TERMINAL REPORT</div>
-        </div>
-        <div style="width: 95px; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 75px; height: 90px; border: 1.5px solid #000; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #475569; background: #fff;">Photo</div>
-        </div>
-      </div>
-
-      <table style="width:100%; border-collapse: collapse; margin-top: 6px; border: 1.5px solid #000;">
-        <tr>
-          <td colspan="2" style="background: #e2e8f0; padding: 4px 15px; text-align: left; font-weight: 800; font-size: 12.5px; border: 1.5px solid #000; font-family:'Segoe UI', Arial, sans-serif;">NAME OF STUDENT: ${studentName.toUpperCase()}</td>
-        </tr>
-        <tr>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; width: 50%; border: 1.5px solid #000;">Sex: <span style="font-weight: 500;">${sex.toUpperCase()}</span></td>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; width: 50%; border: 1.5px solid #000; text-align: right;">Class Roll: <span style="font-weight: 500;">${classRoll}</span></td>
-        </tr>
-        <tr>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000;">CLASS: <span style="font-weight: 500;">${className}</span></td>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000; text-align: right;">Term: <span style="font-weight: 500;">${term.replace(/\D/g, "") || term}</span></td>
-        </tr>
-        <tr>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000;">ATTENDANCE: <span style="font-weight: 500;">${attendanceVal || "N/A"}</span></td>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000; text-align: right;">Date: <span style="font-weight: 500;">${vacationDate}</span></td>
-        </tr>
-      </table>
-
-      <table style="width:100%; border-collapse: collapse; margin-top: 6px; border: 1.5px solid #000;">
-        <thead>
-          <tr style="border: 1.5px solid #000; background: #f1f5f9;">
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 10.5px; text-align: left; width: 25%;">Subject</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 10.5px; text-align: center; width: 12%;">Class Score (50%)</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 10.5px; text-align: center; width: 12%;">Exam Score (50%)</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11px; text-align: center; width: 12%;">Total score</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11px; text-align: center; width: 8%;">Grade</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 10.5px; text-align: center; width: 15%;">CLASS AVERAGE</th>
-            <th style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 10.5px; text-align: center; width: 16%;">Remark</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-          <tr style="font-weight: 800; border-top: 2px solid #000; background: #f8fafc;">
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11px;">TOTAL</td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11.5px; text-align: center;">${totalClassScore.toFixed(1)}</td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11.5px; text-align: center;">${totalExamScore.toFixed(1)}</td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 12px; text-align: center;">${totalScore.toFixed(1)}</td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px;"></td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px; font-size: 11px; text-align: center;">${totalClassAverage.toFixed(1)}</td>
-            <td style="border: 1.5px solid #000; padding: 3.5px 5px;"></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <table style="width:100%; border-collapse: collapse; margin-top: 4px; border: 1.5px solid #000;">
-        <tr>
-          <td rowspan="2" style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; width: 15%; background: #f1f5f9;">IF TOTAL SCORE</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; font-weight: 700; width: 35%; background: #fff;">&gt;=80 - A , &gt;=75 - P , &gt;=70 - AP</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">A</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">P</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">AP</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">D</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">B</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 8.5px; font-weight: 800; text-align: center; background: #f8fafc; width: 10%;">IC</td>
-        </tr>
-        <tr>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; font-weight: 700; background: #fff;">&gt;=50 - D , &lt;=50 - B</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Advance</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Proficient</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Approaching Proficiency</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Developing</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Beginning</td>
-          <td style="border: 1.5px solid #000; padding: 2px; font-size: 7.5px; text-align: center; color: #475569;">Incomplete</td>
-        </tr>
-      </table>
-      ${deficitsHtml}
-
-      <div style="background: #e2e8f0; border: 1.5px solid #000; border-top: none; text-align: center; font-weight: 800; font-size: 9.5px; padding: 1.5px; letter-spacing: 0.5px; font-family:'Segoe UI', Arial, sans-serif;">GRAPHICAL REPRESENTATION OF RESULT BY TOTAL SCORE</div>
-      <div style="border: 1.5px solid #000; border-top: none; padding: 5px 10px 3px 10px; display: flex; justify-content: center; height: 115px; background: #fff;">
-        <svg viewBox="0 0 800 120" width="100%" height="120">
-          <line x1="50" y1="10" x2="780" y2="10" stroke="#cbd5e1" stroke-dasharray="3,3" />
-          <line x1="50" y1="50" x2="780" y2="50" stroke="#cbd5e1" stroke-dasharray="3,3" />
-          <line x1="50" y1="90" x2="780" y2="90" stroke="#000" stroke-width="1.5" />
-          
-          <text x="40" y="13" font-size="8" font-family="'Segoe UI', Arial, sans-serif" text-anchor="end" font-weight="bold">100</text>
-          <text x="40" y="53" font-size="8" font-family="'Segoe UI', Arial, sans-serif" text-anchor="end" font-weight="bold">50</text>
-          <text x="40" y="93" font-size="8" font-family="'Segoe UI', Arial, sans-serif" text-anchor="end" font-weight="bold">0</text>
-          
-          ${svgBars}
-        </svg>
-      </div>
-
-      <!-- Reopen date & Overall score box -->
-      <div style="display: flex; justify-content: space-between; margin-top: 5px; align-items: stretch; gap: 10px;">
-        <div style="flex: 1; border: 1.5px solid #000; padding: 5px; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; background: #fff;">
-          <span>School Reopens on:</span>
-          <span style="border: 1.5px solid #000; padding: 3px 8px; font-weight: 800; background: #f8fafc; font-size: 10px;">${reopeningDate}</span>
-        </div>
-        <table style="border: 1.5px solid #000; border-collapse: collapse; font-size: 10px; width: 170px; background: #fff;">
-          <tr>
-            <td style="border: 1.5px solid #000; padding: 3px; font-weight: 700; background: #f1f5f9;">Overall Score</td>
-            <td style="border: 1.5px solid #000; padding: 3px; font-weight: 800; text-align: center; width: 70px;">${totalScore.toFixed(1)}</td>
-          </tr>
-          <tr>
-            <td style="border: 1.5px solid #000; padding: 3px; font-weight: 700; text-align: right; background: #f1f5f9;">Out of</td>
-            <td style="border: 1.5px solid #000; padding: 3px; font-weight: 800; text-align: center;">${(printedRows.length * 100).toFixed(1)}</td>
-          </tr>
-        </table>
-      </div>
-
-      <!-- Traits and comments Section -->
-      <table style="width: 100%; border-collapse: collapse; margin-top: 5px; border: 1.5px solid #000; font-size: 10px; background: #fff;">
-        <tr style="background: #f1f5f9;">
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 700; text-align: center; width: 33.3%;">Conduct</td>
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 700; text-align: center; width: 33.3%;">Attitude</td>
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 700; text-align: center; width: 33.3%;">Interest</td>
-        </tr>
-        <tr>
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 800; text-align: center; font-size: 11px;">${conduct.toUpperCase() || "—"}</td>
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 800; text-align: center; font-size: 11px;">${attitude.toUpperCase() || "—"}</td>
-          <td style="border: 1.5px solid #000; padding: 4px; font-weight: 800; text-align: center; font-size: 11px;">${interest.toUpperCase() || "—"}</td>
-        </tr>
-        <tr>
-          <td colspan="3" style="border: 1.5px solid #000; padding: 6px; line-height: 1.4; min-height: 35px;">
-            <div style="font-weight: 700; text-decoration: underline; margin-bottom: 2px;">Class Master/Mistress' Comment:</div>
-            <div style="font-size: 11px; color: #0f172a;">${commentText || "No comment report submitted."}</div>
-          </td>
-        </tr>
-      </table>
-
-      <!-- Signatures Section -->
-      <table style="width: 100%; border-collapse: collapse; margin-top: 5px; border: 1.5px solid #000; font-size: 10px; background: #fff;">
-        <tr>
-          <td style="border: 1.5px solid #000; padding: 12px 10px; width: 50%; height: 50px; vertical-align: bottom;">
-            <div style="display: flex; align-items: flex-end; justify-content: space-between;">
-              <span style="font-weight: 700; font-size: 11px;">Class Teacher's Signature:</span>
-              <div style="border-bottom: 1.5px dashed #000; width: 160px; height: 1px; margin-bottom: 2px;"></div>
-            </div>
-          </td>
-          <td style="border: 1.5px solid #000; padding: 12px 10px; width: 50%; height: 50px; vertical-align: bottom;">
-            <div style="display: flex; align-items: flex-end; justify-content: space-between;">
-              <span style="font-weight: 700; font-size: 11px;">Headmaster / Headmistress' Signature:</span>
-              <div style="border-bottom: 1.5px dashed #000; width: 140px; height: 1px; margin-bottom: 2px;"></div>
-            </div>
-          </td>
-        </tr>
-      </table>
-    </div>
-  </div>
-  <script>window.onload = () => window.print();</script>
-</body>
-</html>`;
-
-    const win = window.open("", "_blank", "width=900,height=700");
-    if (!win) {
-      alert("Pop-up blocked. Please allow pop-ups for this site.");
+    if (!academicYear) {
+      alert("Please select an Academic Year before submitting.");
       return;
     }
-    win.document.write(html);
-    win.document.close();
+    if (!term) {
+      alert("Please select a Term before submitting.");
+      return;
+    }
+    if (!finalSubject.trim()) {
+      alert("Please select a Subject before submitting.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      for (const [sName, data] of entries) {
+        const parsedScore = parseFloat(data.score);
+        const parsedMax = parseFloat(maxScore);
+        
+        if (isNaN(parsedScore) || isNaN(parsedMax)) continue;
+
+        await submitWeeklyTest({
+          teacherId: activeTeacher?.id || "admin",
+          teacherName: activeTeacher?.fullName || "Teacher",
+          classId: schoolClassId,
+          studentName: sName,
+          academicYear,
+          term,
+          weekLabel: week,
+          subject: finalSubject,
+          score: parsedScore,
+          maxScore: parsedMax,
+          remark: "",
+        });
+      }
+      setBulkScores({});
+      alert(`Successfully submitted ${entries.length} test scores!`);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handlePrintStudentSbaSheet = (studentName: string) => {
-    if (!academicYear || !term) {
-      alert("Select academic year and term before printing the SBA breakdown.");
-      return;
-    }
+  const [expandedYear, setExpandedYear] = useState<string | null>(null);
 
-    const activeStudents = getActiveClassStudents(schoolClassId, academicYear, term, reports, weeklyTests, midterms, sbaRecords);
-    const classRoll = activeStudents.length || 1;
+  const groupedByYear = useMemo(() => {
+    const groups: Record<string, Record<string, Record<string, WeeklyTest[]>>> = {};
+    
+    // Sort to ensure consistent grouping order
+    const sortedTests = [...teacherTests].sort((a, b) => {
+      const yearA = a.academicYear || "";
+      const yearB = b.academicYear || "";
+      if (yearA !== yearB) return yearB.localeCompare(yearA);
 
-    const studentSubjects = getStudentReportSubjects(studentName);
-    const rowsHtml = studentSubjects.map((subj) => {
-      const report = getStudentSubjectReport(studentName, subj);
-      const cw = (report.weeklyValue / 2).toFixed(1);
-      const hw = (report.weeklyValue / 2).toFixed(1);
-      const group = report.groupWorkScore.toFixed(1);
-      const project = report.projectWorkScore.toFixed(1);
-      const test2 = report.midtermValue.toFixed(1);
-      const tot60 = report.total60.toFixed(1);
-      const scaled50 = report.classScore.toFixed(1);
+      const termA = a.term || "";
+      const termB = b.term || "";
+      if (termA !== termB) return termA.localeCompare(termB);
 
-      return `
-        <tr>
-          <td class="left" style="font-weight: 600;">${subj.toUpperCase()}</td>
-          <td>${cw}</td>
-          <td>${hw}</td>
-          <td>${group}</td>
-          <td>${project}</td>
-          <td>${test2}</td>
-          <td style="font-weight: 700; background: #f8fafc;">${tot60}</td>
-          <td style="font-weight: 700; background: #f1f5f9;">${scaled50}</td>
-        </tr>
-      `;
-    }).join("");
+      const weekA = parseInt((a.weekLabel || "").replace(/\D/g, "")) || 0;
+      const weekB = parseInt((b.weekLabel || "").replace(/\D/g, "")) || 0;
+      if (weekA !== weekB) return weekA - weekB;
 
-    const className = SCHOOL_CLASSES.find((c) => c.id === schoolClassId)?.name ?? schoolClassId;
+      const subA = a.subject || "";
+      const subB = b.subject || "";
+      if (subA !== subB) return subA.localeCompare(subB);
 
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Student SBA Sheet</title>
-  <style>
-    @page { size: portrait; margin: 8mm; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 10px; color: #0f172a; background: #fff; }
-    .page { max-width: 800px; margin: 0 auto; height: 100%; box-sizing: border-box; }
-    .report-container { border: 2px solid #000; padding: 12px; height: 98vh; display: flex; flex-direction: column; background: #fff; position: relative; box-sizing: border-box; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border: 1.5px solid #000; padding: 6px 8px; font-size: 11px; }
-    th { background: #cbd5e1; color: #000; font-weight: 800; font-family:'Segoe UI', Arial, sans-serif; }
-    td { text-align: center; }
-    td.left { text-align: left; }
-    @media print {
-      body { padding: 0; background: none; }
-      .page { margin: 0; width: 100%; height: 100%; }
-      .report-container { height: 98vh; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <div class="report-container">
-      <!-- Header Section -->
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 4px;">
-        <div style="width: 95px; display: flex; align-items: center; justify-content: center;">
-          <img src="/ybs.png" alt="YBS Logo" style="width: 81px; height: 81px; object-fit: contain;" />
-        </div>
-        <div style="flex: 1; text-align: center;">
-          <div style="font-size:22.5px; font-weight:800; font-family:'Outfit', 'Segoe UI', Arial, sans-serif; letter-spacing: 0.5px; line-height: 1.1;">YERIEL BRACHA SCHOOL</div>
-          <div style="font-size:10px; font-weight:700; margin-top:2px;">P. O. BOX DT 2962, Adenta- Accra</div>
-          <div style="font-size:10px; font-weight:700;">Tel: 026668550</div>
-          <div style="font-size:10px; font-style:italic; font-weight:700; margin-top:2px;">Motto : Head Heart Hand</div>
-          <div style="font-size:13px; font-weight:800; margin-top:3px; letter-spacing: 1px; text-decoration: underline;">STUDENT SBA BREAKDOWN SHEET</div>
-        </div>
-        <div style="width: 95px; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 75px; height: 90px; border: 1.5px solid #000; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #475569; background: #fff;">Photo</div>
-        </div>
-      </div>
-
-      <!-- Student Profile Section -->
-      <table style="width:100%; border-collapse: collapse; margin-top: 6px; border: 1.5px solid #000;">
-        <tr>
-          <td colspan="2" style="background: #cbd5e1; padding: 6px 15px; text-align: left; font-weight: 800; font-size: 12.5px; border: 1.5px solid #000; font-family:'Segoe UI', Arial, sans-serif;">NAME OF STUDENT: ${studentName.toUpperCase()}</td>
-        </tr>
-        <tr>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; width: 50%; border: 1.5px solid #000; text-align: left;">CLASS: <span style="font-weight: 500;">${className}</span></td>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; width: 50%; border: 1.5px solid #000; text-align: right;">Term: <span style="font-weight: 500;">${term}</span></td>
-        </tr>
-        <tr>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000; text-align: left;">Academic Year: <span style="font-weight: 500;">${academicYear}</span></td>
-          <td style="padding: 4px; font-size: 11px; font-weight: 700; border: 1.5px solid #000; text-align: right;">Class Roll: <span style="font-weight: 500;">${classRoll}</span></td>
-        </tr>
-      </table>
-
-      <!-- SBA Breakdown Table -->
-      <table>
-        <thead>
-          <tr>
-            <th style="text-align: left; width: 30%;">Subject</th>
-            <th>C/W (10)</th>
-            <th>H/W (10)</th>
-            <th>Group (10)</th>
-            <th>Project (10)</th>
-            <th>Test 2 (20)</th>
-            <th>Total (/60)</th>
-            <th>SBA (/50)</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <script>window.onload = () => window.print();</script>
-</body>
-</html>`;
-
-    const win = window.open("", "_blank", "width=900,height=700");
-    if (!win) {
-      alert("Pop-up blocked. Please allow pop-ups for this site.");
-      return;
-    }
-    win.document.write(html);
-    win.document.close();
-  };
-
-  const handlePrintSba = () => {
-    if (allStudentsInClass.length === 0) {
-      alert("No students available for SBA report.");
-      return;
-    }
-    if (!academicYear || !term || !subject || !weekLabel) {
-      alert("Select year, term, subject and week to print the SBA report.");
-      return;
-    }
-
-    const rows = allStudentsInClass.map(studentName => {
-      const weeklyScore = getWeeklyTestScore(studentName);
-      const classWorkScore = Number((weeklyScore / 2).toFixed(2));
-      const homeworkScore = Number((weeklyScore / 2).toFixed(2));
-      const testScore = getMidtermScore(studentName);
-      const groupWorkScore = Number(getSbaValue(studentName, "groupWorkScore"));
-      const projectWorkScore = Number(getSbaValue(studentName, "projectWorkScore"));
-      const examScore = Number(getSbaValue(studentName, "examScore"));
-      const total60 = classWorkScore + homeworkScore + groupWorkScore + projectWorkScore + testScore;
-      const subtotalA = Number(((total60 / 60) * 50).toFixed(2));
-      const subtotalB = Number((examScore * 0.5).toFixed(2));
-      return {
-        studentName,
-        classWorkScore,
-        homeworkScore,
-        testScore,
-        groupWorkScore,
-        projectWorkScore,
-        total60: Number(total60.toFixed(2)),
-        subtotalA,
-        examScore: Number(examScore.toFixed(2)),
-        subtotalB,
-        totalAplusB: Number((subtotalA + subtotalB).toFixed(2)),
-      };
+      const nameA = a.studentName || "";
+      const nameB = b.studentName || "";
+      return nameA.localeCompare(nameB);
     });
 
-    const sortedRows = rows.sort((a, b) => b.totalAplusB - a.totalAplusB || a.studentName.localeCompare(b.studentName));
-    let lastScore: number | null = null;
-    let lastPosition = 0;
-    const rowsWithPosition = sortedRows.map((row, index) => {
-      const position = row.totalAplusB === lastScore ? lastPosition : index + 1;
-      lastScore = row.totalAplusB;
-      lastPosition = position;
-      return { ...row, position };
+    sortedTests.forEach(t => {
+      if (!groups[t.academicYear]) groups[t.academicYear] = {};
+      if (!groups[t.academicYear][t.term]) groups[t.academicYear][t.term] = {};
+      if (!groups[t.academicYear][t.term][t.weekLabel]) groups[t.academicYear][t.term][t.weekLabel] = [];
+      groups[t.academicYear][t.term][t.weekLabel].push(t);
     });
+    return groups;
+  }, [teacherTests]);
 
-    const printRows = sortSbaRowsByStudentName(rowsWithPosition);
-    const rowsHtml = printRows.map((row) => `
-      <tr>
-        <td>${row.studentName}</td>
-        <td>${row.classWorkScore.toFixed(2)}</td>
-        <td>${row.homeworkScore.toFixed(2)}</td>
-        <td>${row.groupWorkScore.toFixed(2)}</td>
-        <td>${row.projectWorkScore.toFixed(2)}</td>
-        <td>${row.testScore.toFixed(2)}</td>
-        <td>${row.total60.toFixed(2)}</td>
-        <td>${row.subtotalA.toFixed(2)}</td>
-        <td>${row.examScore.toFixed(2)}</td>
-        <td>${row.subtotalB.toFixed(2)}</td>
-        <td>${row.totalAplusB.toFixed(2)}</td>
-        <td>${row.position}</td>
-      </tr>
-    `).join("");
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>SBA Report</title>
-  <style>
-    @page { size: landscape; margin: 8mm; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 12px; color: #0f172a; background: #fff; }
-    .header { text-align: center; margin-bottom: 18px; }
-    .header h1 { margin-bottom: 6px; font-size: 26px; }
-    .header p { margin: 0; color: #475569; font-size: 13px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 18px; }
-    th, td { border: 1px solid #cbd5e1; padding: 6px 7px; font-size: 11px; }
-    th { background: #f8fafc; color: #0f172a; font-weight: 700; }
-    td { color: #0f172a; }
-    .footer { margin-top: 24px; font-size: 12px; color: #64748b; }
-    @media print { body { margin: 0; } }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>SBA Report</h1>
-    <p>Class: ${schoolClassId} | Year: ${academicYear} | Term: ${term} | Subject: ${subject} | Weekly Test: ${weekLabel}</p>
-    <p>C/W(10) + H/W(10) + G/W(10) + PROJECT(10) + TEST(20) | TOTAL(/60) | SUB A(/50) + EXAM(100) | SUB B(/50)</p>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Student</th>
-        <th>C/W(10)</th>
-        <th>H/W(10)</th>
-        <th>G/W(10)</th>
-        <th>PROJECT(10)</th>
-        <th>TEST(20)</th>
-        <th>TOTAL(/60)</th>
-        <th>SUB A(/50)</th>
-        <th>EXAM(100)</th>
-        <th>SUB B(/50)</th>
-        <th>TOTAL A + B</th>
-        <th>POSITION</th>
-      </tr>
-    </thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>
-  <div class="footer">Generated on ${new Date().toLocaleString()}</div>
-  <script>window.onload = () => window.print();</script>
-</body>
-</html>`;
-
-    const win = window.open("", "_blank", "width=1100,height=700");
-    if (!win) {
-      alert("Pop-up blocked. Please allow pop-ups for this site.");
-      return;
-    }
-    win.document.write(html);
-    win.document.close();
-  };
+  const handleBulkSubmitCount = Object.keys(bulkScores ?? {}).filter(k => (bulkScores ?? {})[k]?.score?.trim() !== "").length;
 
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-white">Bulk Input ({allStudentsInClass.length} Students)</h3>
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
-            <select
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Academic Year <span className="text-rose-500">*</span>
+            </label>
+            <AcademicYearPicker
               value={academicYear}
-              onChange={(e) => setAcademicYear(e.target.value)}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
-            >
-              <option value="">-- Select Year --</option>
-              <option value="2024/2025">2024/2025</option>
-              <option value="2025/2026">2025/2026</option>
-              <option value="2026/2027">2026/2027</option>
-            </select>
+              onChange={setAcademicYear}
+              allowEmpty
+              placeholder="-- Select Year --"
+            />
+            {!academicYear && <p className="mt-1 text-[10px] text-rose-400">Required before submitting</p>}
           </div>
           <div>
-            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Term <span className="text-rose-500">*</span>
+            </label>
             <select
               value={term}
               onChange={(e) => setTerm(e.target.value)}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+              className={`w-full rounded-xl border bg-slate-950/60 px-3 py-2 text-sm text-white outline-none transition focus:ring ${
+                !term ? "border-rose-500/60 ring-rose-500/40 focus:ring" : "border-white/15 ring-amber-400"
+              }`}
+              style={{ color: "#ffffff" }}
             >
-              <option value="">-- Select Term --</option>
-              <option value="Term 1">Term 1</option>
-              <option value="Term 2">Term 2</option>
-              <option value="Term 3">Term 3</option>
+              <option value="" className="bg-slate-900 text-slate-400">-- Select Term --</option>
+              <option value="Term 1" className="bg-slate-900 text-white">Term 1</option>
+              <option value="Term 2" className="bg-slate-900 text-white">Term 2</option>
+              <option value="Term 3" className="bg-slate-900 text-white">Term 3</option>
             </select>
+            {!term && <p className="mt-1 text-[10px] text-rose-400">Required before submitting</p>}
           </div>
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Subject</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Week</label>
             <select
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none ring-amber-400 transition focus:ring"
+              value={week}
+              onChange={(e) => setWeek(e.target.value)}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none ring-amber-400 transition focus:ring"
+              style={{ color: "#ffffff" }}
             >
-              <option value="">-- Select Subject --</option>
-              {allowedSubjects.map((sub) => (
-                <option key={sub.id} value={sub.name}>{sub.name}</option>
+              {Array.from({ length: 13 }, (_, i) => `Week ${i + 1}`).map(w => (
+                <option key={w} className="bg-slate-900 text-white">{w}</option>
               ))}
             </select>
+            {isTerm3WeeklyTest && (
+              <p className="mt-1 text-[10px] text-amber-400">
+                Term 3 plan: {getTerm3WeeklySubject(week, schoolClassId) || "No weekly subject mapped yet"}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Subject <span className="text-rose-500">*</span>
+            </label>
+            {hasSubjectOption ? (
+              <select
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                className={`w-full rounded-xl border bg-slate-950/60 px-3 py-2 text-sm text-white outline-none transition focus:ring ${
+                  !subject ? "border-rose-500/60 ring-rose-500/40 focus:ring" : "border-white/15 ring-amber-400"
+                }`}
+                style={{ color: "#ffffff" }}
+              >
+                <option value="" className="bg-slate-900 text-slate-400">-- Select Subject --</option>
+                {subjectOptions.map(s => (
+                  <option key={s.id} value={s.name} className="bg-slate-900 text-white">
+                    {s.name} {plannedSubject && subjectNamesMatch(s.name, plannedSubject) ? "(Planned)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-xs text-rose-400">No subjects available.</p>
+            )}
+            {plannedSubject && (
+              <p className="mt-1 text-[10px] text-amber-400">
+                Term 3 plan: {plannedSubject}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Max Score (Raw)</label>
+            <input
+              type="number"
+              value={maxScore}
+              onChange={(e) => setMaxScore(e.target.value)}
+              placeholder="100"
+              className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3.5 py-2.5 text-base font-medium text-white outline-none ring-amber-400 transition focus:ring placeholder:text-slate-500"
+              style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
+            />
           </div>
         </div>
-        <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
-          <p className="text-[10px] uppercase tracking-wide text-slate-400">Auto-selected week</p>
-          <p className="mt-1 font-medium text-amber-300">{weekLabel || "No matching weekly test found"}</p>
+
+        <div className="max-h-[500px] overflow-y-auto rounded-xl border border-white/5 mobile-table-container">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead className="sticky top-0 z-10 bg-slate-950 text-[10px] md:text-xs uppercase tracking-wider text-slate-300">
+              <tr>
+                <th className="px-3 md:px-4 py-3 font-semibold text-slate-300">Student Name</th>
+                <th className="px-3 md:px-4 py-3 font-semibold w-32 md:w-44 text-slate-300">Raw</th>
+                <th className="px-3 md:px-4 py-3 font-semibold text-center text-slate-300">Score</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {allStudentsInClass.map(sName => (
+                <tr key={sName} className="hover:bg-white/5 tap-highlight">
+                  <td className="px-3 md:px-4 py-3 text-white font-medium text-xs md:text-sm">{sName}</td>
+                  <td className="px-3 md:px-4 py-3">
+                    <input
+                      type="number"
+                      value={bulkScores[sName]?.score || ""}
+                      onChange={(e) => setBulkScores(prev => ({
+                        ...prev,
+                        [sName]: { ...prev[sName], score: e.target.value }
+                      }))}
+                      placeholder="0"
+                      className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3.5 py-2.5 text-sm md:text-base font-semibold outline-none focus:ring-2 focus:ring-amber-500 text-white placeholder:text-slate-500 transition"
+                      style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
+                    />
+                  </td>
+                  <td className="px-3 md:px-4 py-3 text-center text-white font-bold text-xs md:text-sm" style={{ color: "#ffffff" }}>
+                    {bulkScores[sName]?.score && maxScore ? ((parseFloat(bulkScores[sName].score) / parseFloat(maxScore)) * 20).toFixed(2) : "0.00"}
+                  </td>
+                </tr>
+              ))}
+              {allStudentsInClass.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-4 py-8 text-center text-slate-400 italic">
+                    No students found. Add them in the Comments tab.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
+
         <button
-          onClick={handlePrintSba}
-          className="mt-4 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:brightness-110"
+          onClick={handleBulkSubmit}
+          disabled={isSubmitting || handleBulkSubmitCount === 0 || !academicYear || !term || !hasSubjectOption}
+          className="mt-4 w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 font-bold text-slate-950 transition hover:brightness-110 disabled:opacity-50"
         >
-          Print SBA Report
+          {!academicYear || !term
+            ? "Select Year & Term to submit"
+            : isSubmitting
+            ? "Submitting Bulk Scores..."
+            : `Submit Scores for ${handleBulkSubmitCount} Students`}
         </button>
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h4 className="text-lg font-semibold text-white">Individual Report Cards</h4>
-          <span className="text-xs text-slate-400">{allStudentsInClass.length} student(s)</span>
-        </div>
-        <div className="space-y-2">
-          {allStudentsInClass.length === 0 ? (
-            <p className="text-sm text-slate-500">No students available for report cards.</p>
-          ) : (
-            allStudentsInClass.map((studentName) => {
-              const report = getStudentReportCardData(studentName);
-              return (
-                <div key={studentName} className="flex flex-col gap-2 rounded-xl border border-white/10 bg-slate-950/40 p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="font-medium text-slate-100">{studentName}</p>
-                    {report.subjects.length > 0 ? (
-                      <p className="text-xs text-slate-400">
-                        Subjects: {report.subjects.length} • Total Marks: {report.totalMarks.toFixed(2)} • Average: {report.average.toFixed(2)} • Remark: {report.overallRemark}
-                      </p>
-                    ) : (
-                      <p className="text-xs text-slate-400">No subject data available yet for this student.</p>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handlePrintStudentReportCard(studentName)}
-                      className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20"
-                    >
-                      Print Report Card
-                    </button>
-                    <button
-                      onClick={() => handlePrintStudentSbaSheet(studentName)}
-                      className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
-                    >
-                      Print SBA Breakdown
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+      <div className="space-y-3">
+        <h4 className="flex items-center gap-2 font-semibold text-white">
+          <span>📅</span> Test History
+        </h4>
+        {Object.entries(groupedByYear).map(([year, terms]) => (
+          <div key={year} className="space-y-2">
+            <button
+              onClick={() => setExpandedYear(expandedYear === year ? null : year)}
+              className="flex w-full items-center justify-between rounded-lg bg-white/5 p-2 text-left text-white"
+            >
+              <span className="text-sm font-medium text-white">{year}</span>
+              <ChevronDown className={`h-4 w-4 text-white transition-transform ${expandedYear === year ? "rotate-180" : ""}`} />
+            </button>
+            <AnimatePresence>
+              {expandedYear === year && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="space-y-3 overflow-hidden pl-4"
+                >
+                  {Object.entries(terms).map(([termName, weeks]) => (
+                    <div key={termName} className="space-y-2">
+                      <p className="text-xs font-semibold text-slate-200 uppercase tracking-widest">{termName}</p>
+                      {Object.entries(weeks).map(([weekName, tests]) => (
+                        <div key={weekName} className="rounded-xl border border-white/5 bg-slate-900/40 p-3">
+                           <p className="mb-2 text-xs font-medium text-slate-300 underline decoration-white/30">{weekName}</p>
+                          <div className="space-y-2">
+                            {tests.map(test => (
+                              <div key={test.id} className="flex items-center justify-between gap-3 border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                                {editingHistoryId === test.id ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 w-full bg-slate-950/80 p-2 rounded-lg border border-white/30">
+                                    <div>
+                                      <p className="text-xs font-semibold text-white">{test.studentName} — <span className="text-slate-300">{test.subject}</span></p>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-slate-300">Score:</span>
+                                          <input
+                                            type="number"
+                                            value={editScoreValue}
+                                            onChange={(e) => setEditScoreValue(e.target.value)}
+                                            className="w-24 rounded-lg border border-white/20 bg-slate-900 px-2.5 py-1 text-xs md:text-sm font-semibold outline-none text-white focus:ring-1 focus:ring-amber-400 placeholder:text-slate-500"
+                                            style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
+                                          />
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-slate-300">/ Max:</span>
+                                          <input
+                                            type="number"
+                                            value={editMaxScoreValue}
+                                            onChange={(e) => setEditMaxScoreValue(e.target.value)}
+                                            className="w-16 rounded-lg border border-white/20 bg-slate-900 px-2 py-1 text-xs md:text-sm font-semibold outline-none text-white focus:ring-1 focus:ring-amber-400 placeholder:text-slate-500"
+                                            style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff" }}
+                                          />
+                                        </div>
+                                        <span className="text-[10px] font-bold text-white">
+                                          ({(parseFloat(editScoreValue) && parseFloat(editMaxScoreValue) ? (parseFloat(editScoreValue) / parseFloat(editMaxScoreValue) * 20).toFixed(2) : "0.00")}/20)
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => handleSaveEditTest(test.id)}
+                                        className="rounded bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600 transition"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        onClick={handleCancelEditTest}
+                                        className="rounded border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-white/10 transition"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div>
+                                      <p className="text-sm font-medium text-white">{test.studentName}</p>
+                                      <p className="text-[10px] text-slate-300">
+                                        Subject: {test.subject} • Score: {test.score}/{test.maxScore} <span className="font-bold text-white">({test.calculatedScore}/20)</span>
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleStartEditTest(test)}
+                                        className="text-blue-400 hover:text-blue-300 transition"
+                                        title="Edit score and max score"
+                                      >
+                                        <Edit2 className="h-4 w-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => confirm("Delete this entry?") && deleteWeeklyTest(test.id)}
+                                        className="text-rose-400 hover:text-rose-300 transition"
+                                        title="Delete entry"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        ))}
+        {teacherTests.length === 0 && <p className="text-center text-xs text-slate-500 py-4">No tests recorded yet.</p>}
       </div>
     </div>
   );
@@ -7579,16 +7416,12 @@ function AdminWeeklyReport({
       <div className="grid gap-4 glass-card p-4 md:p-6 md:grid-cols-4">
         <div>
           <label className="mb-1 block text-xs text-slate-400">Year</label>
-          <select
+          <AcademicYearPicker
             value={yearFilter}
-            onChange={(e) => { setYearFilter(e.target.value); setSubjectFilter(""); setExpandedWeek(null); setExpandedClass(null); setExpandedSubject(null); }}
-            className="w-full rounded-lg border border-white/10 bg-slate-950/40 px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-amber-500"
-          >
-            <option value="">All Years</option>
-            <option>2024/2025</option>
-            <option>2025/2026</option>
-            <option>2026/2027</option>
-          </select>
+            onChange={(val) => { setYearFilter(val); setSubjectFilter(""); setExpandedWeek(null); setExpandedClass(null); setExpandedSubject(null); }}
+            allowEmpty
+            placeholder="All Years"
+          />
         </div>
         <div>
           <label className="mb-1 block text-xs text-slate-400">Term</label>
@@ -8035,15 +7868,10 @@ function AdminReportSettings({ reportSettings }: AdminReportSettingsProps) {
       <div className="grid gap-4 md:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Academic Year</label>
-          <select
+          <AcademicYearPicker
             value={selectedYear}
-            onChange={(e) => setSelectedYear(e.target.value)}
-            className="w-full rounded-xl border border-white/15 bg-slate-950/60 px-3 py-2 text-sm outline-none text-white focus:ring-2 focus:ring-amber-500"
-          >
-            <option value="2024/2025">2024/2025</option>
-            <option value="2025/2026">2025/2026</option>
-            <option value="2026/2027">2026/2027</option>
-          </select>
+            onChange={setSelectedYear}
+          />
         </div>
         <div>
           <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">Term</label>
@@ -8287,6 +8115,10 @@ function AdminDataEditor({
   deleteSbaRecord,
   submitTermAttendance,
   deleteStudentCompletely,
+  onOpenPromoteModal,
+  promotionHistoryRecords = [],
+  reportSettings = [],
+  nurseryChecklists = [],
 }: any) {
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
@@ -8498,6 +8330,8 @@ function AdminDataEditor({
                 sbaRecords={sbaRecords}
                 termAttendanceRecords={termAttendanceRecords}
                 nurseryChecklists={nurseryChecklists}
+                promotionHistoryRecords={promotionHistoryRecords}
+                reportSettings={reportSettings}
               />
             )}
             {activeTab === "midterms" && (
@@ -8512,6 +8346,7 @@ function AdminDataEditor({
                 sbaRecords={sbaRecords}
                 termAttendanceRecords={termAttendanceRecords}
                 nurseryChecklists={nurseryChecklists}
+                promotionHistoryRecords={promotionHistoryRecords}
               />
             )}
             {activeTab === "project-work" && (
@@ -8529,6 +8364,7 @@ function AdminDataEditor({
                 midterms={midterms}
                 termAttendanceRecords={termAttendanceRecords}
                 nurseryChecklists={nurseryChecklists}
+                promotionHistoryRecords={promotionHistoryRecords}
               />
             )}
             {activeTab === "group-work" && (
@@ -8546,6 +8382,7 @@ function AdminDataEditor({
                 midterms={midterms}
                 termAttendanceRecords={termAttendanceRecords}
                 nurseryChecklists={nurseryChecklists}
+                promotionHistoryRecords={promotionHistoryRecords}
               />
             )}
             {activeTab === "exams" && (
@@ -8559,6 +8396,11 @@ function AdminDataEditor({
                 title="Exam Score Input"
                 label="Exam Score"
                 maxScore={100}
+                weeklyTests={weeklyTests}
+                midterms={midterms}
+                termAttendanceRecords={termAttendanceRecords}
+                nurseryChecklists={nurseryChecklists}
+                promotionHistoryRecords={promotionHistoryRecords}
               />
             )}
             {activeTab === "attendance" && (
@@ -8575,11 +8417,21 @@ function AdminDataEditor({
             )}
             {activeTab === "students" && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
                   <div>
                     <h4 className="text-lg font-semibold text-white">Student Management ({allStudentsInClass.length})</h4>
-                    <p className="text-xs text-slate-400">Permanently delete students and all their associated academic records from the system.</p>
+                    <p className="text-xs text-slate-400">Permanently delete students or batch promote them to the next class.</p>
                   </div>
+                  {onOpenPromoteModal && (
+                    <button
+                      type="button"
+                      onClick={onOpenPromoteModal}
+                      className="flex items-center gap-2 rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/30 border border-emerald-500/30 shrink-0"
+                    >
+                      <Users className="h-4 w-4 text-emerald-400" />
+                      <span>Promote Students</span>
+                    </button>
+                  )}
                 </div>
                 {allStudentsInClass.length === 0 ? (
                   <p className="py-6 text-center text-sm italic text-slate-500">No students registered in this class.</p>
@@ -8620,21 +8472,6 @@ function AdminDataEditor({
       )}
     </div>
   )}
-
-  <AnimatePresence>
-    {isPromoteModalOpen && (
-      <PromoteStudentsModal
-        isOpen={isPromoteModalOpen}
-        onClose={() => setIsPromoteModalOpen(false)}
-        reports={reports}
-        weeklyTests={weeklyTests}
-        midterms={midterms}
-        sbaRecords={sbaRecords}
-        nurseryChecklists={nurseryChecklists}
-        termAttendanceRecords={termAttendanceRecords}
-      />
-    )}
-  </AnimatePresence>
 </div>
   );
 }
